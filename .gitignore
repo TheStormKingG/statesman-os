@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# builds
+.next/
+out/
+build/
+dist/
+
+# env — never commit real secrets
+.env
+.env*.local
+.env.production
+!.env.example
+
+# test artefacts
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# local database
+*.local.sql
+pgdata/
+
+# os / editor
+.DS_Store
+*.pem
+*.log
+npm-debug.log*
+.vscode/
+.idea/
