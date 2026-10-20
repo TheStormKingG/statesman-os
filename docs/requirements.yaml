@@ -1,0 +1,1494 @@
+# STATESMAN OS - machine-readable requirement register.
+#
+# This file is the single source of requirement, invariant and instrument ids
+# (canon section 12). docs/requirements-traceability.md is a deterministic render of
+# this file: edit here first, re-render, and commit both in the same change.
+# Per the amended canon section 8.6 neither file may contain a timestamp, a generation
+# date or a per-run verification outcome. A design status from {PLANNED, DEFERRED} is
+# permitted and is required by master prompt section 3 item 2; a run status
+# (PASS / FAIL / NOT RUN) is not representable in either file.
+#
+# Canon:  docs/superpowers/specs/2026-10-20-statesman-os-p0-mvp-design.md (SOS-DESIGN-001)
+# PRD:    docs/PRD.md (SOS-PRD-001 v1.0)
+# Prompt: docs/MASTER_PROMPT.md section 3 item 2
+# Layout: docs/implementation-plan.md owns migration filenames and the source/test layout.
+#         Every implementation_path and covering_test below is a file that one of its
+#         tasks creates. A path here that no task creates is a defect (canon section 12).
+
+meta:
+  id: SOS-TRACE-001
+  canon: SOS-DESIGN-001
+  prd: SOS-PRD-001 v1.0
+  implementation_state: no application code exists; nothing in this register has been executed
+  status_vocabulary: [PLANNED, DEFERRED]
+  status_is: a design property of scope, stable between runs
+  run_outcome_vocabulary: [PASS, FAIL, NOT RUN]
+  run_outcome_lives_in: reports/trace.json
+  verification_vocabulary: [unit, integration, e2e, posture-check, manual, deferred]
+  file_layout_of_record: docs/implementation-plan.md
+  decisions_record: docs/decisions.md
+  manual_leg_rule: >-
+    Canon section 12.3 - a verification method that includes "manual" names a
+    verification_evidence record. Until that record exists and is referenced, the
+    requirement reaches at most NOT RUN in reports/trace.json, and docs:check asserts that
+    every row whose verification includes "manual" names its record. No sign-off name and
+    no date is recorded for a review that has not happened.
+  nfr_priority_note: >-
+    PRD section 6.4 assigns priorities to FRs only. PRD section 11 states NFR release
+    targets without priorities, and the canon does not assign them either. NFR priority
+    below is recorded as "P0 (inferred)" on the basis of PRD section 11 and the
+    master prompt go/no-go conditions; it is an inference, not a PRD statement.
+
+# How docs/requirements-traceability.md is produced from this file. These rules are the
+# render contract: applying them twice to the same content yields the same bytes.
+render:
+  target: docs/requirements-traceability.md
+  rules:
+    - acceptance, component and rule strings are copied verbatim and carry no trailing period
+    - prd_ref "PRD 6.1" renders as "section 6.1" in prose and "§6.1" in a table cell
+    - an empty list renders as an em dash
+    - a path, table or identifier renders in backticks, comma-separated, in list order
+    - a status cell carries only the status token; deferral gates render in their own table
+    - counts in the header are derived from this file, never typed
+
+# Entity groups referenced as $name in db_entities. Taken from canon section 5.
+entity_groups:
+  reference:
+    - scenario
+    - scenario_version
+    - source
+    - scenario_claim
+    - rubric_version
+    - schema_migrations
+  user_owned:
+    - decision
+    - decision_revision
+    - challenge_run
+    - challenge
+    - challenge_source_claim
+    - challenge_response
+    - dimension_assessment
+    - assessment_observation
+    - assessment_observation_source_claim
+    - reflection
+    - development_action
+    - audit_event
+  grant_protected:
+    - app_user
+    - user_session
+    - auth_attempt
+
+requirements:
+  - id: FR-01
+    priority: P0
+    prd_ref: PRD 6.1
+    acceptance: >-
+      User sees task, assumed role, timeline, available resources, missing information
+      and topic before starting
+    component: Today (screen A) and Decision Desk (screen B) read path; scenario service
+    db_entities: [scenario, scenario_version]
+    verification: [e2e, integration]
+    tag: req:FR-01
+    implementation_paths:
+      - src/app/(app)/today/page.tsx
+      - src/app/(app)/desk/[scenarioVersionId]/page.tsx
+      - src/app/(app)/scenario/[id]/page.tsx
+      - src/server/content/scenario.ts
+    covering_tests:
+      - tests/integration/content/read-only.test.ts
+      - tests/e2e/decision-loop.spec.ts
+    status: PLANNED
+    notes: >-
+      The brief renders the source register, the as_of_date, the fiction label and the data
+      gaps before the response form.
+
+  - id: FR-02
+    priority: P0
+    prd_ref: PRD 6.1
+    acceptance: >-
+      Every factual scenario assertion is traceable to accessible source(s) or explicitly
+      flagged as invented scenario data
+    component: Decision Desk source register; seeded scenario migration
+    db_entities: [scenario_version, source, scenario_claim]
+    verification: [integration, e2e]
+    tag: req:FR-02
+    implementation_paths:
+      - migrations/0004_reference_tables.sql
+      - migrations/0009_seed_demo_ph_001.sql
+      - content/sources.json
+      - src/server/content/scenario.ts
+    covering_tests:
+      - tests/unit/content/fiction-labels.test.ts
+      - tests/unit/content/source-register.test.ts
+      - tests/unit/content/claim-coverage.test.ts
+      - tests/integration/content/read-only.test.ts
+    status: PLANNED
+    notes: >-
+      scenario_version carries is_fiction and as_of_date (canon 5.1); scenario_claim is
+      the grounding whitelist shared with FR-08.
+
+  - id: FR-03
+    priority: P0
+    prd_ref: PRD 6.1
+    acceptance: >-
+      Required decision fields are validated; incomplete drafts may be reopened
+      without loss
+    component: Decision Desk form; draft persistence service
+    db_entities: [decision]
+    verification: [unit, integration, e2e]
+    tag: req:FR-03
+    implementation_paths:
+      - migrations/0010_decision.sql
+      - src/server/decision/draft.ts
+      - src/app/(app)/desk/[scenarioVersionId]/page.tsx
+    covering_tests:
+      - tests/integration/decision/draft.test.ts
+      - tests/e2e/decision-loop.spec.ts
+    status: PLANNED
+    notes: >-
+      Canon 5.1 grants UPDATE on draft_payload only; draft_updated_at is trigger-set so a
+      payload-only update cannot evade the frozen-draft check. A partial unique index
+      enforces one open draft per user per scenario version. The unit leg is field
+      validation (master prompt section 9); no unit test is listed in this row's
+      covering_tests, so that leg is uncovered and the database constraints of the
+      submission path are an independent backstop rather than a substitute for it.
+
+  - id: FR-04
+    priority: P0
+    prd_ref: PRD 6.1
+    acceptance: >-
+      Timestamped snapshot is saved; edits create a new revision, not a replacement
+    component: Submission transaction; revision service
+    db_entities: [decision, decision_revision, audit_event]
+    verification: [integration, unit]
+    tag: req:FR-04
+    implementation_paths:
+      - migrations/0010_decision.sql
+      - migrations/0011_decision_state.sql
+      - migrations/0012_submit.sql
+      - src/server/decision/submit.ts
+      - src/server/decision/append-revision.ts
+    covering_tests:
+      - tests/integration/decision/submit.test.ts
+      - tests/integration/decision/append-revision.test.ts
+      - tests/integration/decision/state.test.ts
+    status: PLANNED
+    notes: Covers INV-01, INV-02, INV-03 and INV-11.
+
+  - id: FR-05
+    priority: P0
+    prd_ref: PRD 6.1
+    acceptance: >-
+      User supplies 0–100% confidence plus a stated expected outcome and timeframe
+    component: Decision Journal submission fields
+    db_entities: [decision_revision]
+    verification: [unit, integration, e2e]
+    tag: req:FR-05
+    implementation_paths:
+      - migrations/0012_submit.sql
+      - src/server/decision/submit.ts
+      - src/app/(app)/desk/[scenarioVersionId]/page.tsx
+    covering_tests:
+      - tests/integration/decision/submit.test.ts
+      - tests/e2e/decision-loop.spec.ts
+    status: PLANNED
+    notes: >-
+      confidence smallint check between 0 and 100; forecast and rationale NOT NULL;
+      horizon stored separately (canon 5.1), so a submission missing the confidence value,
+      the expected outcome or the timeframe is rejected by the schema and not only by the
+      form. PRD 7.4 keeps forecast, confidence, deadline and later observation separate.
+      The unit leg is the confidence-bound check of master prompt section 9; no unit
+      test is listed in this row's covering_tests, so that leg is uncovered and the
+      database assertion is the only one this register carries.
+
+  - id: FR-06
+    priority: P1
+    prd_ref: PRD 6.1
+    acceptance: >-
+      Search/filter by sector, geography, complexity and review status; default
+      recommendation remains one case
+    component: deferred - no P0 surface
+    db_entities: [scenario, scenario_version]
+    verification: [deferred]
+    tag: req:FR-06
+    implementation_paths: []
+    covering_tests: []
+    status: DEFERRED
+    gate: >-
+      PRD 3.2 V1.1 gate - reliable weekly use, good case quality, safe reviewer
+      permissions. The P0 history surface is a simple list.
+
+  - id: FR-07
+    priority: P0
+    prd_ref: PRD 6.2
+    acceptance: >-
+      Five required lenses appear; each references decision text, constraints or an
+      identified information gap
+    component: Challenge Review (screen C); AI adapter
+    db_entities: [challenge_run, challenge, decision_revision]
+    verification: [integration, e2e]
+    tag: req:FR-07
+    implementation_paths:
+      - migrations/0013_challenge.sql
+      - src/server/ai/adapter.ts
+      - src/server/ai/fixture-adapter.ts
+      - src/server/ai/mode.ts
+      - src/server/ai/run.ts
+      - src/app/(app)/challenge/[decisionRevisionId]/page.tsx
+    covering_tests:
+      - tests/unit/ai/fixture-adapter.test.ts
+      - tests/unit/ai/mode.test.ts
+      - tests/integration/ai/provenance-check.test.ts
+    status: PLANNED
+    notes: >-
+      Fixture mode only until a live provider is configured; canon 7.1 forbids keying
+      mode on key absence and the UI must label fixture-backed responses. A challenge run
+      is pinned to a decision_revision, not to a decision (canon 7.2).
+
+  - id: FR-08
+    priority: P0
+    prd_ref: PRD 6.2
+    acceptance: >-
+      Unsupported factual claims show uncertainty; no fabricated citations, statutes or
+      institutional positions
+    component: Grounding gate; response validator; Challenge Review labels
+    db_entities: [challenge, challenge_source_claim, scenario_claim, source]
+    verification: [integration, unit]
+    tag: req:FR-08
+    implementation_paths:
+      - migrations/0013_challenge.sql
+      - src/server/ai/grounding.ts
+      - src/server/ai/schemas/challenge.ts
+      - src/server/ai/schemas/free-text.ts
+      - src/server/ai/validate.ts
+      - src/server/ai/parse.ts
+    covering_tests:
+      - tests/integration/ai/grounding.test.ts
+      - tests/unit/ai/schema-walk.test.ts
+      - tests/unit/ai/refinements.test.ts
+      - tests/unit/ai/no-extract-json.test.ts
+    status: PLANNED
+    notes: Covers INV-09. Structural adversarial cases are release blockers (canon 7.6).
+
+  - id: FR-09
+    priority: P0
+    prd_ref: PRD 6.2
+    acceptance: >-
+      User may reply, disagree or flag incorrect challenge; their disagreement is
+      preserved
+    component: Challenge Review response form
+    db_entities: [challenge_response, challenge]
+    verification: [integration, e2e]
+    tag: req:FR-09
+    implementation_paths:
+      - migrations/0013_challenge.sql
+      - src/server/challenge/respond.ts
+      - src/app/(app)/challenge/[decisionRevisionId]/page.tsx
+    covering_tests:
+      - tests/unit/challenge/addressed-count.test.ts
+      - tests/e2e/decision-loop.spec.ts
+    status: PLANNED
+    notes: >-
+      disposition in (accepted, disputed, flagged_incorrect); flagged_incorrect is its
+      own state and is excluded from "addressed" (canon 5.1).
+
+  - id: FR-10
+    priority: P0
+    prd_ref: PRD 6.2
+    acceptance: >-
+      Each rated dimension includes observations, evidence anchors and limitations; no
+      single readiness score
+    component: Reflection and Development (screen D); assessment service
+    db_entities:
+      - dimension_assessment
+      - assessment_observation
+      - assessment_observation_source_claim
+      - rubric_version
+    verification: [integration, unit, e2e]
+    tag: req:FR-10
+    implementation_paths:
+      - migrations/0014_assessment.sql
+      - src/server/assessment/*
+      - src/app/(app)/reflect/[decisionId]/page.tsx
+    covering_tests:
+      - tests/integration/assessment/ai-ceiling.test.ts
+      - tests/integration/assessment/observation-grounding.test.ts
+      - tests/unit/ui/no-composite-score.test.ts
+    status: PLANNED
+    notes: >-
+      Covers INV-08. Canon 1.2 prohibits any composite readiness, character or viability
+      score.
+
+  - id: FR-11
+    priority: P0
+    prd_ref: PRD 6.2
+    acceptance: >-
+      Action has description, owner, due date/status and link to originating feedback
+    component: Development Plan
+    db_entities: [development_action, challenge, dimension_assessment]
+    verification: [integration, e2e]
+    tag: req:FR-11
+    implementation_paths:
+      - migrations/0016_development_action.sql
+      - src/server/development/*
+      - src/app/(app)/actions/*
+    covering_tests:
+      - tests/integration/development/origin-link.test.ts
+    status: PLANNED
+    notes: >-
+      origin_challenge_id and origin_dimension_assessment_id carry the link to
+      originating feedback (canon 5.1).
+
+  - id: FR-12
+    priority: P0
+    prd_ref: PRD 6.2
+    acceptance: >-
+      User can repeat a similar case or submit improved reasoning; both attempts remain
+      visible
+    component: Revision service; History (screen E)
+    db_entities: [decision_revision, development_action, decision]
+    verification: [integration, e2e]
+    tag: req:FR-12
+    implementation_paths:
+      - migrations/0012_submit.sql
+      - migrations/0016_development_action.sql
+      - src/server/decision/append-revision.ts
+      - src/app/(app)/history/[decisionId]/page.tsx
+    covering_tests:
+      - tests/integration/development/reassessment.test.ts
+      - tests/integration/decision/append-revision.test.ts
+    status: PLANNED
+    notes: >-
+      development_action.reassessment_decision_id links the repeat attempt; append-only
+      decision_revision keeps both visible.
+
+  - id: FR-13
+    priority: P1
+    prd_ref: PRD 6.2
+    acceptance: >-
+      Reviewer only sees items selected for sharing; review author, date and status
+      preserved
+    component: deferred - no sharing surface and no global role column in the MVP
+    db_entities: []
+    verification: [deferred]
+    tag: req:FR-13
+    implementation_paths: []
+    covering_tests: []
+    status: DEFERRED
+    gate: >-
+      PRD 3.2 V1.1 gate - safe reviewer permissions; canon O6 specifies a record_share
+      table rather than a global role when it arrives.
+
+  - id: FR-14
+    priority: P0
+    prd_ref: PRD 6.3
+    acceptance: >-
+      Unauthorized users cannot read any scenario response, journal or action
+    component: Session auth; withUser guard; RLS on every user-owned table
+    db_entities: [$grant_protected, $user_owned]
+    verification: [integration, posture-check, e2e]
+    tag: req:FR-14
+    implementation_paths:
+      - migrations/0002_verify_security_posture.sql
+      - migrations/0005_identity.sql
+      - migrations/0006_user_owned.sql
+      - src/server/db/with-user.ts
+      - src/server/db/assert-unprivileged.ts
+      - src/server/auth/session.ts
+    covering_tests:
+      - tests/integration/db/cross-user-denial.test.ts
+      - tests/integration/db/identity-grants.test.ts
+      - tests/adversarial/idor.test.ts
+      - tests/adversarial/pooled-identity.test.ts
+    status: PLANNED
+    notes: >-
+      Covers INV-04, INV-05 and INV-06. Canon 6.1 - withUser takes no session parameter
+      and calls requireSession itself.
+
+  - id: FR-15
+    priority: P0
+    prd_ref: PRD 6.3
+    acceptance: >-
+      User can navigate from an action to the challenge, decision version and case
+      sources
+    component: History and evidence trail (screen E)
+    db_entities:
+      - development_action
+      - challenge
+      - decision_revision
+      - scenario_version
+      - scenario_claim
+      - source
+    verification: [integration, e2e]
+    tag: req:FR-15
+    implementation_paths:
+      - src/server/history/trail.ts
+      - src/app/(app)/history/page.tsx
+      - src/app/(app)/history/[decisionId]/page.tsx
+    covering_tests:
+      - tests/integration/history/view-posture.test.ts
+      - tests/e2e/decision-loop.spec.ts
+    status: PLANNED
+    notes: Covers INV-07 - the trail must resolve the pinned scenario_version, not the latest.
+
+  - id: FR-16
+    priority: P0
+    prd_ref: PRD 6.3
+    acceptance: >-
+      User can export records in portable format; deletion follows documented retention
+      and backup rules
+    component: Export route; app.erase_self(); privacy notice
+    db_entities: [$user_owned, $grant_protected]
+    verification: [integration, e2e, manual]
+    tag: req:FR-16
+    implementation_paths:
+      - src/app/api/export/route.ts
+      - src/server/export/build.ts
+      - migrations/0017_erase_self.sql
+      - src/app/api/account/delete/route.ts
+      - src/app/(app)/privacy/page.tsx
+    covering_tests:
+      - tests/integration/export/completeness.test.ts
+      - tests/integration/deletion/erase-self.test.ts
+    verification_evidence: docs/reviews/retention-notice.md
+    status: PLANNED
+    notes: >-
+      Canon 5.2 - on delete restrict from app_user, not cascade; erase_self derives
+      identity internally and never takes a uuid; the privacy notice states real
+      retention including backups, with no immediate-erasure promise. The manual leg is
+      the retention-notice wording review, which no automated test can carry; per the
+      manual_leg_rule it is discharged only by the named verification_evidence record, and
+      until that record exists and is referenced this row reaches at most NOT RUN in the
+      run report.
+
+  - id: FR-17
+    priority: P1
+    prd_ref: PRD 6.3
+    acceptance: >-
+      Summary counts are recomputable from records; AI narrative is identified as
+      interpretation
+    component: deferred - Monthly Review (screen F) not built
+    db_entities: []
+    verification: [deferred]
+    tag: req:FR-17
+    implementation_paths: []
+    covering_tests: []
+    status: DEFERRED
+    gate: >-
+      PRD 3.2 V1.1 gate - reliable weekly use and good case quality before retrospective
+      surfaces are built. audit_event and the decision lineage keep the counts
+      recomputable from records.
+
+  - id: FR-18
+    priority: P1
+    prd_ref: PRD 6.3
+    acceptance: >-
+      User can set topic preferences and frequency without enabling voter or
+      sensitive-group profiling
+    component: deferred - no preferences surface
+    db_entities: []
+    verification: [deferred]
+    tag: req:FR-18
+    implementation_paths: []
+    covering_tests: []
+    status: DEFERRED
+    gate: >-
+      PRD 3.2 V1.1 gate - reliable weekly use; PRD 3.2 does not enumerate FR-18
+      separately, so it inherits the V1.1 gate. No profiling of voters or sensitive
+      groups is permissible in any form (SR-01).
+
+  - id: FR-19
+    priority: P0
+    prd_ref: PRD 6.3
+    acceptance: >-
+      No private journal content is public or accessible to later Pathway/Service
+      products by default
+    component: RLS posture; absence of any public or reviewer route
+    db_entities: [$user_owned]
+    verification: [posture-check, integration]
+    tag: req:FR-19
+    implementation_paths:
+      - migrations/0002_verify_security_posture.sql
+      - migrations/0006_user_owned.sql
+      - src/server/db/with-user.ts
+      - scripts/check-import-boundary.ts
+    covering_tests:
+      - tests/integration/db/posture.test.ts
+      - tests/integration/db/rls-shape.test.ts
+      - tests/integration/history/view-posture.test.ts
+      - tests/unit/tooling/import-boundary.test.ts
+    status: PLANNED
+    notes: >-
+      Enforced by grant absence plus RLS enabled and forced, not by route-level
+      omission alone. Canon O6 - the MVP ships no global role column.
+
+  - id: NFR-01
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      Private-by-default; authenticated session and authorization checks on every
+      sensitive read/write
+    component: withUser guard; RLS policies; posture check
+    db_entities: [$user_owned, $grant_protected]
+    verification: [posture-check, integration]
+    tag: req:NFR-01
+    implementation_paths:
+      - migrations/0002_verify_security_posture.sql
+      - migrations/0003_privileges.sql
+      - src/server/db/with-user.ts
+      - src/server/db/assert-unprivileged.ts
+    covering_tests:
+      - tests/integration/_000-posture.test.ts
+      - tests/integration/db/privileges.test.ts
+      - tests/integration/db/context.test.ts
+      - tests/unit/db/with-user.test.ts
+    status: PLANNED
+    notes: >-
+      The posture check runs at the end of every migration run in every environment and
+      as integration test number one (canon 4.8, 8.7).
+
+  - id: NFR-02
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      TLS in transit, encryption at rest, protected secrets, least privilege and basic
+      security testing
+    component: Deployment posture; roles and grants; CI secret scan and dependency audit
+    db_entities: [$grant_protected]
+    verification: [posture-check, manual]
+    tag: req:NFR-02
+    implementation_paths:
+      - scripts/bootstrap.sql
+      - scripts/assert-bootstrap.sql
+      - migrations/0003_privileges.sql
+      - scripts/secret-scan.ts
+      - .env.example
+    covering_tests:
+      - tests/integration/db/bootstrap.test.ts
+      - tests/integration/db/identity-grants.test.ts
+      - tests/integration/auth/token-storage.test.ts
+      - tests/unit/tooling/secret-scan.test.ts
+    verification_evidence: docs/reviews/encryption-at-rest.md
+    status: PLANNED
+    notes: >-
+      Canon O1 - encryption at rest has no mechanism in Postgres (no TDE). FileVault
+      locally, a managed or encrypted volume on any deploy. Declared an open release
+      item, not silently met. The manual leg is the deployment-posture review of that
+      open item; per the manual_leg_rule it is discharged only by the named
+      verification_evidence record, and until that record exists and is referenced this
+      row reaches at most NOT RUN in the run report.
+
+  - id: NFR-03
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      All submitted versions, assessment changes and review decisions have actor/time
+      metadata
+    component: audit_event writes on submission, revision, assessment, action and erasure
+    db_entities: [audit_event]
+    verification: [integration]
+    tag: req:NFR-03
+    implementation_paths:
+      - migrations/0006_user_owned.sql
+      - migrations/0012_submit.sql
+      - migrations/0017_erase_self.sql
+      - src/server/audit/write.ts
+    covering_tests:
+      - tests/integration/audit/immutability.test.ts
+      - tests/integration/decision/submit.test.ts
+      - tests/integration/deletion/erase-self.test.ts
+    status: PLANNED
+    notes: >-
+      Canon 5.1 - user_id is the subject and actor_user_id the actor; a deletion writes
+      actor_user_id IS NULL, so the insert policy is with check (true) and there is no
+      UPDATE or DELETE policy.
+
+  - id: NFR-04
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      Responsive design for mobile and desktop; primary flow usable on a small phone
+      screen
+    component: Layout and component layer across screens A-E
+    db_entities: []
+    verification: [e2e]
+    tag: req:NFR-04
+    implementation_paths:
+      - src/app/layout.tsx
+      - src/components/*
+      - src/app/__a11y-canary/page.tsx
+    covering_tests:
+      - tests/e2e/responsive.spec.ts
+      - tests/e2e/mobile.spec.ts
+      - tests/e2e/canary.spec.ts
+    status: PLANNED
+    notes: >-
+      Canon 8.5 - the 320px overflow detector must fail on the 400px fixed block in the
+      canary route, which is mounted only under E2E_FAULTS=1 (INS-03).
+
+  - id: NFR-05
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      Target WCAG 2.2 AA; keyboard access, text contrast, meaningful labels, no
+      color-only meaning
+    component: Component layer; axe gate in E2E
+    db_entities: []
+    verification: [e2e]
+    tag: req:NFR-05
+    implementation_paths:
+      - src/components/*
+      - src/components/rendered-text.tsx
+      - src/app/__a11y-canary/page.tsx
+    covering_tests:
+      - tests/e2e/a11y.spec.ts
+      - tests/e2e/focus.spec.ts
+      - tests/e2e/keyboard.spec.ts
+      - tests/e2e/canary.spec.ts
+    status: PLANNED
+    notes: >-
+      Canon 8.5 - the axe gate must fail on the canary (INS-03) and focus indication is
+      asserted as a difference between focused and blurred computed styles plus a
+      contrast ratio of at least 3:1, because a presence check on outlineStyle can never
+      fail (INS-08).
+
+  - id: NFR-06
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      Pilot availability objective >= 99.5% monthly, excluding pre-announced maintenance
+    component: Operational objective - no application component
+    db_entities: []
+    verification: [deferred]
+    tag: req:NFR-06
+    implementation_paths: []
+    covering_tests: []
+    status: DEFERRED
+    gate: >-
+      Measurable only from pilot operation; a throttled local E2E budget is not evidence
+      about pilot hardware. PRD 11 does not defer it, so the deferral is ours: it is
+      recorded in docs/decisions.md per canon 12.2 and this row references that record
+      rather than deciding scope inside the register.
+    decision_ref: docs/decisions.md
+
+  - id: NFR-07
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      Target core screen load <= 3s at typical mobile connection in pilot performance
+      tests
+    component: Core screen render path - no P0 measurement instrument
+    db_entities: []
+    verification: [deferred]
+    tag: req:NFR-07
+    implementation_paths: []
+    covering_tests: []
+    status: DEFERRED
+    gate: >-
+      Measurable only from pilot operation; a throttled local E2E budget is not evidence
+      about pilot hardware. PRD 11 closes by stating these are proposed design acceptance
+      targets, not measured performance. Canon 12.2 forbids leaving this row P0 and
+      PLANNED behind an implementation path that no task creates, so it is deferred on the
+      same honest basis as NFR-06 and recorded in docs/decisions.md. It flips to PLANNED
+      if and when the file layout of record carries a throttled Playwright budget spec
+      with its own positive control - a deliberately slowed fixture route that must fail
+      the budget.
+    decision_ref: docs/decisions.md
+
+  - id: NFR-08
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      Preserve input on model/API failure; clear retry/fallback message without claiming
+      successful feedback
+    component: AI adapter resilience; Challenge Review unavailable state
+    db_entities: [challenge_run, decision_revision]
+    verification: [integration, e2e]
+    tag: req:NFR-08
+    implementation_paths:
+      - src/server/ai/run.ts
+      - src/server/ai/adapter.ts
+      - src/app/(app)/challenge/[decisionRevisionId]/page.tsx
+    covering_tests:
+      - tests/integration/ai/failure-isolation.test.ts
+      - tests/integration/ai/budget.test.ts
+      - tests/integration/ai/idempotency.test.ts
+      - tests/e2e/resilience.spec.ts
+    status: PLANNED
+    notes: >-
+      Canon 7.5 - the model call happens outside the write transaction; a failing call
+      must not delete a draft, mutate a locked revision or mark review complete. A
+      missing key in live mode renders this state rather than falling back to fixtures
+      (canon 7.1). failure_code and the partial idempotency index let a failed run be
+      retried.
+
+  - id: NFR-09
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      Export decision history, actions and reviews in a documented machine-readable
+      format
+    component: Export route and serializer
+    db_entities: [$user_owned]
+    verification: [integration, e2e]
+    tag: req:NFR-09
+    implementation_paths:
+      - src/app/api/export/route.ts
+      - src/server/export/build.ts
+    covering_tests:
+      - tests/integration/export/completeness.test.ts
+    status: PLANNED
+    notes: >-
+      Canon O2 - React cache() outside a render context is unsettled for the export
+      route and must be decided empirically before it is relied on. The format document
+      the acceptance condition requires is not among the implementation_paths of this row,
+      so the "documented" half of the condition is uncovered.
+
+  - id: NFR-10
+    priority: P0 (inferred)
+    prd_ref: PRD 11
+    acceptance: >-
+      Source links stored with dates; broken/withdrawn sources flagged and cases
+      reviewable or archived
+    component: Source register; source status and archival
+    db_entities: [source, scenario_claim, scenario_version]
+    verification: [integration]
+    tag: req:NFR-10
+    implementation_paths:
+      - migrations/0004_reference_tables.sql
+      - migrations/0009_seed_demo_ph_001.sql
+      - src/server/content/scenario.ts
+    covering_tests:
+      - tests/unit/content/source-register.test.ts
+    status: PLANNED
+    notes: >-
+      Canon 12.1 item 4 makes this a required P0 control, not a declared gap - source
+      gains a status column (active | withdrawn | unreachable) and scenario_version an
+      archival flag, with a CI assertion that a seeded withdrawn source is reported. The
+      dates half is covered by the source register. The flagging and archival half has no
+      implementation_path and no covering test in this row, so it is PLANNED and uncovered
+      rather than met.
+
+invariants:
+  - id: INV-01
+    name: Immutability of a submitted revision
+    canon_ref: canon 4.4, 5.1
+    rule: >-
+      A submitted decision_revision cannot be updated, deleted or truncated. Enforced by
+      BEFORE UPDATE OR DELETE triggers, a BEFORE TRUNCATE FOR EACH STATEMENT trigger
+      (V15), and absent UPDATE/DELETE/TRUNCATE grants.
+    tag: inv:INV-01
+    required_control: >-
+      Paired positive control - the same transaction must succeed in appending a new
+      revision, so the failure is shown to be the mutation and not the fixture.
+    covers: [FR-04]
+    covering_tests:
+      - tests/integration/decision/submit.test.ts
+      - tests/integration/audit/immutability.test.ts
+    status: PLANNED
+
+  - id: INV-02
+    name: Double-submit idempotency
+    canon_ref: canon 4.4, 5.1; master prompt 6
+    rule: >-
+      Two concurrent submissions of the same revision produce one row, not two, keyed on
+      decision_revision.idempotency_token (unique) and unique (decision_id, revision_no).
+      The arbitration is an explicit select for update on the parent decision row; the
+      unique constraint is the backstop, not the mechanism. The row-count assertion that
+      makes a zero-row write loud is INV-11.
+    tag: inv:INV-02
+    required_control: >-
+      Genuinely concurrent - two clients, explicit BEGIN, interleaved statements, an
+      xact_start overlap assertion and an application rendezvous. Lock-wait detection is
+      not a valid negative control (V23); waitUntilBlocked must be shown to return false
+      on different rows (INS-01).
+    covers: [FR-04]
+    covering_tests:
+      - tests/integration/decision/double-submit.test.ts
+      - tests/integration/decision/append-revision.test.ts
+    status: PLANNED
+
+  - id: INV-03
+    name: Illegal transition rejection
+    canon_ref: canon 4.4 (V28, V29)
+    rule: >-
+      state is GENERATED ALWAYS AS STORED from the five milestone timestamps by the
+      IMMUTABLE function app.derive_decision_state, with per-branch enum casts and never a
+      cast of the CASE result (V12). The BEFORE UPDATE trigger derives the PROSPECTIVE
+      state by calling that same function on NEW's milestone timestamps, compares
+      OLD.state to the prospective state against a whitelist, and raises uppercase custom
+      SQLSTATEs (V13) that the API maps to distinct HTTP statuses. The trigger must NEVER
+      read NEW.state - it is NULL in a BEFORE UPDATE trigger on a generated column (V28,
+      reproduced on this cluster), so a trigger that reads it compares against NULL on
+      every transition and therefore permits everything or rejects everything. One
+      function definition serves both the column and the guard, so they cannot drift
+      (V29). RLS never encodes transitions (V7).
+    tag: inv:INV-03
+    required_control: >-
+      A meta-test over all 32 combinations of the five milestone timestamps being null or
+      non-null, asserting that the function's result and the stored column agree for every
+      combination - this is what fails against a trigger that reads NEW.state, because
+      every comparison sees NULL. Plus: each rejected pair is paired with the legal
+      transition out of the same state, and every custom SQLSTATE is round-trip tested for
+      case (V13 - a lowercase SQLSTATE silently resolves to 42704).
+    covers: [FR-04]
+    covering_tests:
+      - tests/integration/decision/state.test.ts
+    status: PLANNED
+
+  - id: INV-04
+    name: Cross-user denial with positive control
+    canon_ref: canon 8.2
+    rule: >-
+      A sees the row (1), B sees 0, B's write raises nothing, A still sees 1. Inside a
+      rolled-back transaction the policy is dropped and the row must become visible.
+    tag: inv:INV-04
+    required_control: >-
+      The policy-drop probe is the control. A bare rowCount === 0 proves nothing, because
+      DELETE 0 under RLS is byte-identical to deleting a nonexistent id (V19) and a
+      failing USING clause raises nothing (V7). Every denial case asserts the after-state
+      read, not only the row count.
+    covers: [FR-14, FR-19, NFR-01]
+    covering_tests:
+      - tests/integration/db/cross-user-denial.test.ts
+      - tests/adversarial/idor.test.ts
+    status: PLANNED
+
+  - id: INV-05
+    name: Missing-context validation
+    canon_ref: canon 4.3, 6.1
+    rule: >-
+      app.require_user_id() raises SQLSTATE 28000 when app.current_user_id is NULL or the
+      empty string (V5), and withUser calls it eagerly after set_config so a missing
+      context fails loudly regardless of query shape (V6).
+    tag: inv:INV-05
+    required_control: >-
+      Negative control - the same query with context set must return the row, and the
+      no-context case must raise rather than return zero rows.
+    covers: [FR-14, NFR-01]
+    covering_tests:
+      - tests/integration/db/context.test.ts
+      - tests/integration/db/eager-validation.test.ts
+    status: PLANNED
+
+  - id: INV-06
+    name: Pooled-identity leak across sequential requests
+    canon_ref: canon 7.6, 6.1
+    rule: >-
+      Two sequential requests on one warmed pooled client must not let the first
+      request's identity reach the second. DISCARD ALL in the finally block makes a
+      mistaken is_local=false inert; app.require_user_id() stays STABLE, because an
+      IMMUTABLE variant was proven to leak one user's rows to another from the second
+      execution of a prepared statement onward.
+    tag: inv:INV-06
+    required_control: >-
+      Catalog assertion provolatile = 's' as the primary gate (it cannot be scheduled
+      away), plus a two-request sequence on a single client asserting the second
+      request's rows belong to the second user only.
+    covers: [FR-14, NFR-01]
+    covering_tests:
+      - tests/adversarial/pooled-identity.test.ts
+      - tests/integration/db/discard-all.test.ts
+    status: PLANNED
+
+  - id: INV-07
+    name: Scenario-version pinning
+    canon_ref: canon 5.1, 7.2, 7.3
+    rule: >-
+      decision_revision pins scenario_version_id by composite FK, scenario_version is
+      immutable once published_at is set, and every challenge or assessment record names
+      the exact revision and scenario version evaluated.
+    tag: inv:INV-07
+    required_control: >-
+      Publish a later scenario_version and assert the submitted decision's trail still
+      resolves the pinned version, with a positive control that the new version is
+      otherwise reachable.
+    covers: [FR-02, FR-15]
+    covering_tests:
+      - tests/integration/history/view-posture.test.ts
+      - tests/integration/content/read-only.test.ts
+    status: PLANNED
+
+  - id: INV-08
+    name: AI never awards maturity level 3 or 4
+    canon_ref: canon 5.1, 1.2; PRD 7.2
+    rule: >-
+      check (assessor_kind <> 'ai' or observed_level <= 2) keeps the full 0-4 domain in
+      the database while constraining the AI, and a trigger forbids any AI-path update of
+      a human_reviewer row.
+    tag: inv:INV-08
+    required_control: >-
+      Positive control - the same insert with assessor_kind = 'human_reviewer' and
+      observed_level 3 must succeed, so the rejection is attributable to the assessor
+      kind.
+    covers: [FR-10]
+    covering_tests:
+      - tests/integration/assessment/ai-ceiling.test.ts
+    status: PLANNED
+
+  - id: INV-09
+    name: Citation whitelist
+    canon_ref: canon 5.1, 7.3
+    rule: >-
+      Every evidence_ref and source_claim is checked against scenario_claim for the
+      pinned scenario_version_id, and the citation row carries a composite FK over
+      (scenario_version_id, source_id, claim_id) plus the owning challenge's (id,
+      user_id), so a fabricated citation cannot be persisted. A challenge whose citations
+      do not all resolve is dropped individually and the drop is recorded with a
+      failure_code. The same chain exists for assessment_observation_source_claim.
+    tag: inv:INV-09
+    required_control: >-
+      Positive control - an approved claim id from the same scenario_version must
+      persist, and the unapproved id must be rejected at the database layer with the
+      application check disabled, so the FK is shown to be load-bearing.
+    covers: [FR-08, FR-02]
+    covering_tests:
+      - tests/integration/ai/grounding.test.ts
+      - tests/integration/assessment/observation-grounding.test.ts
+    status: PLANNED
+
+  - id: INV-10
+    name: Backfill bracketing in one migration file
+    canon_ref: canon 4.4, 10 (V8)
+    rule: >-
+      FORCE ROW LEVEL SECURITY makes an owner-run UPDATE WHERE true affect zero rows and
+      raise nothing, and SET row_security = off is refused (V8). Every data migration
+      therefore brackets alter table no force and alter table force in the SAME migration
+      file, and the migration lint rejects an unmatched no force. A migration that leaves
+      a table NO FORCE is the posture regression the lint exists to catch.
+    tag: inv:INV-10
+    required_control: >-
+      A planted fixture containing an unmatched no force must be REPORTED by the lint; a
+      correctly bracketed fixture must not be. A lint that reports neither has not been
+      shown to read the file.
+    covers: [FR-19, NFR-01]
+    covering_tests:
+      - tests/unit/tooling/migration-lint.test.ts
+    status: PLANNED
+
+  - id: INV-11
+    name: Row-count assertion on every privileged write
+    canon_ref: canon 4.4 (V7)
+    rule: >-
+      EVERY privileged write asserts its own row count - get diagnostics n = row_count;
+      if n <> 1 then raise using errcode = 'ST005' - because a failing RLS USING clause
+      affects zero rows and raises nothing (V7), so silence is never success and a row
+      count of 0 never distinguishes denial from absence. This applies to the submission
+      path, the state-transition path and the erasure path alike, not to submission only.
+    tag: inv:INV-11
+    required_control: >-
+      A test double that zeroes the row count must cause a raise, asserted separately on
+      the submission, transition and erasure paths. A write path with no such assertion
+      is a gap even when its happy-path test passes.
+    covers: [FR-04, FR-16, NFR-03]
+    covering_tests:
+      - tests/integration/decision/submit.test.ts
+      - tests/integration/decision/state.test.ts
+      - tests/integration/deletion/erase-self.test.ts
+    status: PLANNED
+
+instruments:
+  - id: INS-01
+    name: waitUntilBlocked reports the negative
+    canon_ref: canon 8.4
+    rule: >-
+      waitUntilBlocked must return false when two sessions lock different rows.
+      Harness-fatal.
+    tag: inv:INS-01
+    covering_tests:
+      - tests/integration/harness/instruments.test.ts
+    status: PLANNED
+  - id: INS-02
+    name: Revision-number helper reports a difference
+    canon_ref: canon 8.4
+    rule: >-
+      The revision-number read helper, run sequentially, must produce different values.
+      Harness-fatal.
+    tag: inv:INS-02
+    covering_tests:
+      - tests/integration/harness/instruments.test.ts
+    status: PLANNED
+  - id: INS-03
+    name: a11y and overflow canary
+    canon_ref: canon 8.5
+    rule: >-
+      The axe gate and the 320px overflow detector must both fail on /__a11y-canary,
+      which is mounted only under E2E_FAULTS=1.
+    tag: inv:INS-03
+    covering_tests:
+      - tests/e2e/canary.spec.ts
+    status: PLANNED
+  - id: INS-04
+    name: Sentinel check in both directions
+    canon_ref: canon 8.1
+    rule: >-
+      With no context every protected table returns 0; as the sentinel user each returns
+      exactly 1. A table shipped without RLS leaks its sentinel and the run dies.
+    tag: inv:INS-04
+    covering_tests:
+      - tests/integration/db/sentinels.test.ts
+      - tests/integration/harness/app-role.test.ts
+    status: PLANNED
+  - id: INS-05
+    name: Observability positive control
+    canon_ref: canon 8.4
+    rule: >-
+      A positive observability assertion must distinguish a NULLed pg_stat_activity
+      (V24) from "not yet blocked".
+    tag: inv:INS-05
+    covering_tests:
+      - tests/integration/harness/instruments.test.ts
+    status: PLANNED
+  - id: INS-06
+    name: gates:selftest deep equality
+    canon_ref: canon 8.6
+    rule: >-
+      gates:selftest fixtures assert deep equality against an expected per-requirement
+      object, not an exit code - five fixtures asserting only code === 2 let a checker
+      that returns 0 or 2 pass seven of ten. trace:check is the separate script that
+      diffs only the deterministic committed document; the deep-equality fixtures do not
+      belong to it.
+    tag: inv:INS-06
+    covering_tests:
+      - tests/unit/tooling/trace-check.test.ts
+      - tests/unit/tooling/tags-reporter.test.ts
+    status: PLANNED
+  - id: INS-07
+    name: Test-isolation doctrine
+    canon_ref: canon 8.3
+    rule: >-
+      Per-worker CREATE DATABASE TEMPLATE statesman_test_template, dropped at teardown -
+      never TRUNCATE, which the immutability triggers forbid by design. Migrations are
+      applied by lexical glob so a new migration cannot be omitted from the test path.
+      Tests connect as statesman_app and a wrong-role connection is HARNESS-FATAL, not a
+      warning. Seeding goes through withUser so a missing INSERT policy surfaces instead
+      of being bypassed. withUser contains no rollback branch and no process.env
+      reference; per-test transaction isolation is injected by test-only code through an
+      optional provider.
+    tag: inv:INS-07
+    required_control: >-
+      Point the fixture at a statesman_migrator connection string and assert the harness
+      ABORTS - it fails while the harness merely logs. Separately assert that the compiled
+      source of withUser contains no process.env and no env-gated rollback path.
+    covers_canon: canon 8.3
+    covering_tests:
+      - tests/integration/harness/app-role.test.ts
+      - tests/unit/db/with-user.test.ts
+    status: PLANNED
+  - id: INS-08
+    name: Focus indication asserted as a difference
+    canon_ref: canon 8.5
+    rule: >-
+      Focus visibility is asserted as a DIFFERENCE between focused and blurred computed
+      styles plus a contrast ratio of at least 3:1. A presence check on outlineStyle can
+      never fail, because UA stylesheets give :focus-visible elements outline-style: auto
+      regardless of the author's CSS.
+    tag: inv:INS-08
+    required_control: >-
+      A fixture with the author focus styling removed must FAIL the difference assertion
+      while still reporting outline-style: auto. A gate that passes on that fixture is
+      measuring the UA stylesheet.
+    covering_tests:
+      - tests/e2e/focus.spec.ts
+    status: PLANNED
+
+# Threat and test-case ids are OWNED by docs/threat-model.md (canon section 12) and are
+# registered here verbatim so a tagged test can match them. Without this section the drift
+# guard - a tag in reports/tags-*.json that matches no id in this file is an error -
+# rejects every security test the threat model specifies. The tag for a threat test is
+# tc:<TC-SEC-id>. "covers" names the requirement or invariant the threat attacks, so a
+# threat already exercised by an invariant test does not need a parallel id.
+# canon_12_1: true marks a control the threat model listed as UNDESIGNED and that canon
+# section 12.1 now makes a required P0 control in Slice 6.
+threats:
+  tag_convention: tc:<TC-SEC-id>
+  owner: docs/threat-model.md
+  rows:
+    - id: T-01
+      title: IDOR - cross-user read of any user-owned table
+      test_cases: [TC-SEC-001]
+      tag: tc:TC-SEC-001
+      covers: [FR-14, INV-04]
+      status: PLANNED
+    - id: T-02
+      title: IDOR - cross-user write
+      test_cases: [TC-SEC-002]
+      tag: tc:TC-SEC-002
+      covers: [FR-14, INV-04, INV-11]
+      status: PLANNED
+    - id: T-03
+      title: IDOR through a view without security_invoker
+      test_cases: [TC-SEC-003]
+      tag: tc:TC-SEC-003
+      covers: [FR-19, NFR-01]
+      status: PLANNED
+    - id: T-04
+      title: PUBLIC EXECUTE on SECURITY DEFINER functions
+      test_cases: [TC-SEC-004]
+      tag: tc:TC-SEC-004
+      covers: [FR-14, NFR-01]
+      status: PLANNED
+    - id: T-05
+      title: Privileged-role reachability via role membership
+      test_cases: [TC-SEC-005]
+      tag: tc:TC-SEC-005
+      covers: [NFR-01, INV-06]
+      status: PLANNED
+    - id: T-06
+      title: Table ownership bypasses RLS
+      test_cases: [TC-SEC-006]
+      tag: tc:TC-SEC-006
+      covers: [NFR-01]
+      status: PLANNED
+    - id: T-07
+      title: Pooled-connection identity leak
+      test_cases: [TC-SEC-007]
+      tag: tc:TC-SEC-007
+      covers: [INV-06]
+      status: PLANNED
+    - id: T-08
+      title: Missing-context silent zero-row read
+      test_cases: [TC-SEC-008]
+      tag: tc:TC-SEC-008
+      covers: [INV-05]
+      status: PLANNED
+    - id: T-09
+      title: A failing USING clause as a silent no-op write
+      test_cases: [TC-SEC-009]
+      tag: tc:TC-SEC-009
+      covers: [INV-11]
+      status: PLANNED
+    - id: T-10
+      title: Temp-table shadowing of an unqualified reference
+      test_cases: [TC-SEC-010]
+      tag: tc:TC-SEC-010
+      covers: [NFR-01]
+      status: PLANNED
+    - id: T-11
+      title: A new table or a forgotten grant
+      test_cases: [TC-SEC-011]
+      tag: tc:TC-SEC-011
+      covers: [NFR-01, FR-19]
+      status: PLANNED
+    - id: T-12
+      title: An over-broad policy
+      test_cases: [TC-SEC-012]
+      tag: tc:TC-SEC-012
+      covers: [NFR-01]
+      status: PLANNED
+    - id: T-13
+      title: TRUNCATE destroys immutable history
+      test_cases: [TC-SEC-013]
+      tag: tc:TC-SEC-013
+      covers: [INV-01, NFR-03]
+      status: PLANNED
+    - id: T-14
+      title: Identity supplied as an argument
+      test_cases: [TC-SEC-014]
+      tag: tc:TC-SEC-014
+      covers: [FR-14]
+      status: PLANNED
+    - id: T-15
+      title: An unguarded connection outside the data boundary
+      test_cases: [TC-SEC-015]
+      tag: tc:TC-SEC-015
+      covers: [FR-19]
+      status: PLANNED
+    - id: T-16
+      title: Injection into transaction setup
+      test_cases: [TC-SEC-016]
+      tag: tc:TC-SEC-016
+      covers: [NFR-01]
+      status: PLANNED
+    - id: T-17
+      title: Credential stuffing / password guessing
+      test_cases: [TC-SEC-017]
+      tag: tc:TC-SEC-017
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-18
+      title: Self-DoS through the lockout designs that were cut
+      test_cases: [TC-SEC-018]
+      tag: tc:TC-SEC-018
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-19
+      title: Rate-limit sleep holds a pooled DB client
+      test_cases: [TC-SEC-019]
+      tag: tc:TC-SEC-019
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-20
+      title: Session token theft at rest
+      test_cases: [TC-SEC-020]
+      tag: tc:TC-SEC-020
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-21
+      title: Session token theft in transit or via script
+      test_cases: [TC-SEC-021]
+      tag: tc:TC-SEC-021
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-22
+      title: Session fixation
+      test_cases: [TC-SEC-022]
+      tag: tc:TC-SEC-022
+      covers: [FR-14, NFR-02]
+      status: PLANNED
+    - id: T-23
+      title: Sign-out that does not revoke server-side
+      test_cases: [TC-SEC-023]
+      tag: tc:TC-SEC-023
+      covers: [FR-14]
+      status: PLANNED
+    - id: T-24
+      title: Idle timeout hollowed by prefetch
+      test_cases: [TC-SEC-024]
+      tag: tc:TC-SEC-024
+      covers: [FR-14]
+      status: PLANNED
+    - id: T-25
+      title: A stale session survives a credential or privilege change
+      test_cases: [TC-SEC-025]
+      tag: tc:TC-SEC-025
+      covers: [FR-14]
+      status: PLANNED
+    - id: T-26
+      title: Account-deletion gap
+      test_cases: [TC-SEC-026]
+      tag: tc:TC-SEC-026
+      covers: [FR-16]
+      status: PLANNED
+    - id: T-27
+      title: Cascade deletion destroys audit history
+      test_cases: [TC-SEC-027]
+      tag: tc:TC-SEC-027
+      covers: [NFR-03, FR-16]
+      status: PLANNED
+    - id: T-28
+      title: The erasure flag persists after erasure returns
+      test_cases: [TC-SEC-028]
+      tag: tc:TC-SEC-028
+      covers: [FR-16]
+      status: PLANNED
+    - id: T-29
+      title: Actor and subject conflated in the audit record
+      test_cases: [TC-SEC-029]
+      tag: tc:TC-SEC-029
+      covers: [NFR-03]
+      status: PLANNED
+    - id: T-30
+      title: Prompt injection via scenario text and source excerpts
+      test_cases: [TC-SEC-030]
+      tag: tc:TC-SEC-030
+      covers: [FR-08]
+      status: PLANNED
+    - id: T-31
+      title: Prompt injection via the user's own journal text
+      test_cases: [TC-SEC-031]
+      tag: tc:TC-SEC-031
+      covers: [FR-08]
+      status: PLANNED
+    - id: T-32
+      title: Fabricated citation or claim id
+      test_cases: [TC-SEC-032]
+      tag: tc:TC-SEC-032
+      covers: [INV-09, FR-08]
+      status: PLANNED
+    - id: T-33
+      title: Fabricated statute, endorsement or institutional position
+      test_cases: [TC-SEC-033]
+      tag: tc:TC-SEC-033
+      covers: [FR-08]
+      status: PLANNED
+    - id: T-34
+      title: The assessment path is ungrounded
+      test_cases: [TC-SEC-034]
+      tag: tc:TC-SEC-034
+      covers: [INV-09, FR-10]
+      status: PLANNED
+    - id: T-35
+      title: The AI awards maturity level 3 or 4
+      test_cases: [TC-SEC-035]
+      tag: tc:TC-SEC-035
+      covers: [INV-08]
+      status: PLANNED
+    - id: T-36
+      title: The fixture adapter ships as the production default
+      test_cases: [TC-SEC-036]
+      tag: tc:TC-SEC-036
+      covers: [FR-07]
+      status: PLANNED
+    - id: T-37
+      title: Hostile or malformed model-provider output
+      test_cases: [TC-SEC-037]
+      tag: tc:TC-SEC-037
+      covers: [FR-08]
+      status: PLANNED
+    - id: T-38
+      title: Excessive data sharing with the model provider
+      test_cases: [TC-SEC-038]
+      tag: tc:TC-SEC-038
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-39
+      title: Model cost and token exhaustion
+      test_cases: [TC-SEC-039]
+      tag: tc:TC-SEC-039
+      covers: [NFR-08]
+      status: PLANNED
+    - id: T-40
+      title: A failing AI call corrupts user state
+      test_cases: [TC-SEC-040]
+      tag: tc:TC-SEC-040
+      covers: [NFR-08]
+      status: PLANNED
+    - id: T-41
+      title: Duplicate or concurrent run creates a duplicate record
+      test_cases: [TC-SEC-041]
+      tag: tc:TC-SEC-041
+      covers: [INV-02]
+      status: PLANNED
+    - id: T-42
+      title: Scenario content changes under a submitted decision
+      test_cases: [TC-SEC-042]
+      tag: tc:TC-SEC-042
+      covers: [INV-07]
+      status: PLANNED
+    - id: T-43
+      title: A custom SQLSTATE silently collapses to 42704
+      test_cases: [TC-SEC-043]
+      tag: tc:TC-SEC-043
+      covers: [INV-03]
+      status: PLANNED
+    - id: T-44
+      title: Stored XSS through journal fields
+      test_cases: [TC-SEC-044]
+      tag: tc:TC-SEC-044
+      covers: [NFR-02, FR-19]
+      canon_12_1: true
+      status: PLANNED
+    - id: T-45
+      title: Stored XSS through model output
+      test_cases: [TC-SEC-045]
+      tag: tc:TC-SEC-045
+      covers: [NFR-02, FR-08]
+      canon_12_1: true
+      status: PLANNED
+    - id: T-46
+      title: CSRF against Server Actions
+      test_cases: [TC-SEC-046]
+      tag: tc:TC-SEC-046
+      covers: [NFR-02, FR-14]
+      canon_12_1: true
+      status: PLANNED
+    - id: T-47
+      title: Private content in logs and telemetry
+      test_cases: [TC-SEC-047]
+      tag: tc:TC-SEC-047
+      covers: [NFR-02, FR-19]
+      canon_12_1: true
+      status: PLANNED
+    - id: T-48
+      title: The export route leaks across users
+      test_cases: [TC-SEC-048]
+      tag: tc:TC-SEC-048
+      covers: [FR-16, NFR-09, INV-06]
+      status: PLANNED
+    - id: T-49
+      title: Accidental public exposure of journal content
+      test_cases: [TC-SEC-049]
+      tag: tc:TC-SEC-049
+      covers: [FR-19]
+      status: PLANNED
+    - id: T-50
+      title: Model API key leakage
+      test_cases: [TC-SEC-050]
+      tag: tc:TC-SEC-050
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-51
+      title: DATABASE_URL leakage, or a typo'd role
+      test_cases: [TC-SEC-051]
+      tag: tc:TC-SEC-051
+      covers: [NFR-01, NFR-02]
+      status: PLANNED
+    - id: T-52
+      title: Credentials written to a handoff file
+      test_cases: [TC-SEC-052]
+      tag: tc:TC-SEC-052
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-53
+      title: Vulnerable dependency
+      test_cases: [TC-SEC-053]
+      tag: tc:TC-SEC-053
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-54
+      title: An owner-run backfill silently affects zero rows
+      test_cases: [TC-SEC-054]
+      tag: tc:TC-SEC-054
+      covers: [INV-10]
+      status: PLANNED
+    - id: T-55
+      title: An operator's plain parent DELETE is indistinguishable from authorised erasure
+      test_cases: [TC-SEC-055]
+      tag: tc:TC-SEC-055
+      covers: [FR-16, NFR-03]
+      status: PLANNED
+    - id: T-56
+      title: Policies scoped TO statesman_app lock out the owner and the definer functions
+      test_cases: [TC-SEC-056]
+      tag: tc:TC-SEC-056
+      covers: [NFR-01]
+      status: PLANNED
+    - id: T-57
+      title: A backup taken under FORCE as a non-superuser owner
+      test_cases: [TC-SEC-057]
+      tag: tc:TC-SEC-057
+      covers: [NFR-02]
+      status: PLANNED
+    - id: T-58
+      title: The database does not survive a restart, or refuses to start
+      test_cases: [TC-SEC-058]
+      tag: tc:TC-SEC-058
+      covers: []
+      status: PLANNED
+    - id: T-59
+      title: A quality gate passes while exercising nothing
+      test_cases: [TC-SEC-059]
+      tag: tc:TC-SEC-059
+      covers: [INS-01, INS-02, INS-03, INS-04, INS-05, INS-06, INS-07, INS-08]
+      status: PLANNED
+    - id: SR-01
+      title: No voter profiling or segmentation
+      test_cases: [TC-SEC-060]
+      tag: tc:TC-SEC-060
+      covers: [FR-18]
+      status: PLANNED
+    - id: SR-02
+      title: No targeted political messaging or opinion manipulation
+      test_cases: [TC-SEC-061]
+      tag: tc:TC-SEC-061
+      covers: [FR-08]
+      status: PLANNED
+    - id: SR-03
+      title: No fabricated endorsements, legal authorities or certainty claims
+      test_cases: [TC-SEC-062]
+      tag: tc:TC-SEC-062
+      covers: [FR-08, INV-09]
+      status: PLANNED
+    - id: SR-04
+      title: No covert publication of private journals
+      test_cases: [TC-SEC-063]
+      tag: tc:TC-SEC-063
+      covers: [FR-19, FR-16]
+      status: PLANNED
+    - id: SR-05
+      title: No simulated consequence presented as a forecast
+      test_cases: [TC-SEC-064]
+      tag: tc:TC-SEC-064
+      covers: [FR-10]
+      status: PLANNED
