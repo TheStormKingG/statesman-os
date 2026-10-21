@@ -1,0 +1,31 @@
+# MS2 — the second POSITIVE CONTROL, on the tenancy leg rather than the posture leg.
+#
+# `using (... or true)` is deliberately NOT `using (true)`: posture rule 8 rejects a
+# policy whose rendered qual is literally 'true' or omits require_user_id, and this one
+# fails neither test. The mutation therefore survives the posture gate and has to be
+# caught by a tenancy test instead, which is what makes it a control for the SENTINEL
+# mechanism (canon 8.1, V18) rather than for rule 8.
+#
+# Both named catchers must fail: the sentinel-visibility test and the cross-user read.
+# Either one alone would leave the other free to rot.
+#
+# Expect a wide blast radius — around eighteen tests go red. That is informative rather
+# than a problem: attribution here is by NAME, so a broad failure is still pinned to the
+# two assertions that are supposed to notice.
+id: MS2
+title: decision tenancy USING weakened to `... or true`, keeping rule 8 satisfied
+expect: caught
+proves: the sentinel rows make a cross-user READ denial non-vacuous (canon 8.1, V18)
+proves: a tenancy regression that survives the posture check is still caught by a test
+expect-test: every protected table shows exactly 1 sentinel row to the sentinel user and 0 to anyone else
+expect-test: user B reads 0 of A's decisions and 0 of A's revisions
+
+file: migrations/0003_decision.sql
+count: 1
+@@FIND
+create policy decision_tenancy on public.decision
+  using (user_id = app.require_user_id())
+@@REPLACE
+create policy decision_tenancy on public.decision
+  using (user_id = app.require_user_id() or true)
+@@END

@@ -1,0 +1,40 @@
+# M8 — posture rules 9 (SENTINELS) and 10 (NOT NULL) made unmatchable.
+#
+# HISTORY, because it changes what this mutation means. When the adversarial pass ran,
+# rules 9 and 10 were NOT IMPLEMENTED at all: canon §4.8 names ten rules and
+# migrations/0005 carried eight, and nothing asserted the missing two. Both were
+# implemented on 2026-10-21. So M8 is no longer "the rule is missing" — it is the standing
+# proof that the rules now present cannot be hollowed out unnoticed.
+#
+# Rule 9 is the keystone of canon §8.1: without exactly one sentinel row per protected
+# table, every tenancy denial in the suite is a read of an empty table (V18) and cannot be
+# made to fail. Rule 10 is what stops a nullable user_id putting a row outside every
+# policy in BOTH directions — invisible to its owner and unscoped by the predicate.
+#
+# Both edits are in ONE mutation because canon §4.8 lists them as one obligation, and all
+# THREE named catchers must fail: sentinel missing, sentinel duplicated ("exactly one" in
+# the other direction), and nullable user_id. Matching any one of them would let the other
+# two rot.
+id: M8
+title: posture rules 9 SENTINELS and 10 NOT NULL both made unmatchable
+expect: caught
+proves: posture rules 9 and 10 (canon 4.8, V18) each have a control, in both directions for rule 9
+expect-test: [M8] raises ST099 for the sentinel rows deleted
+expect-test: [M8] raises ST099 for a SECOND row owned by the sentinel
+expect-test: [M8] raises ST099 for a nullable user_id column
+
+file: migrations/0005_verify_security_posture.sql
+count: 1
+@@FIND
+        if n <> 1 then
+@@REPLACE
+        if false then
+@@END
+
+file: migrations/0005_verify_security_posture.sql
+count: 1
+@@FIND
+       and not a.attnotnull
+@@REPLACE
+       and not a.attnotnull and false
+@@END

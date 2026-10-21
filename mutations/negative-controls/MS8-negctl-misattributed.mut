@@ -1,0 +1,14 @@
+# NEGATIVE CONTROL for the gate: a mutation that genuinely goes red (it is MS1's edit),
+# but names a catcher that will not fail. The gate MUST report MISATTRIBUTED and exit 1 —
+# "something failed" is not evidence that the right thing failed.
+id: MS8
+title: NEGATIVE CONTROL - a genuinely red mutation attributed to the wrong test
+expect: caught
+expect-test: toolchain smoke runs a sync assertion
+file: migrations/0005_verify_security_posture.sql
+count: 1
+@@FIND
+    where n.nspname in ('app','public') and has_function_privilege('public', p.oid, 'EXECUTE')
+@@REPLACE
+    where n.nspname in ('__never_a_schema__') and has_function_privilege('public', p.oid, 'EXECUTE')
+@@END

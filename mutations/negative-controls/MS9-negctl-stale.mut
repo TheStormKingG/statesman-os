@@ -1,0 +1,13 @@
+# NEGATIVE CONTROL for the gate: the FIND text does not exist. The gate MUST report
+# NOT-APPLIED and exit 1 rather than reading the resulting suite status as evidence.
+id: MS9
+title: NEGATIVE CONTROL - a stale mutation whose target text is gone
+expect: caught
+expect-test: irrelevant
+file: src/server/db/scoped.ts
+count: 1
+@@FIND
+  await thisFunctionWasRenamedThreeRefactorsAgo()
+@@REPLACE
+  // removed
+@@END

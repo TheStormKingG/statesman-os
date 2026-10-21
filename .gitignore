@@ -33,3 +33,6 @@ pgdata/
 npm-debug.log*
 .vscode/
 .idea/
+
+# mutation harness scratch
+/mutations/.work/

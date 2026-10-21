@@ -1,0 +1,13 @@
+# NEGATIVE CONTROL for the gate: edits a COMMENT ONLY, so the suite must stay green,
+# while claiming `expect: caught`. The gate MUST report ESCAPED and exit 1.
+id: MS7
+title: NEGATIVE CONTROL - a comment-only edit that claims to have a control
+expect: caught
+expect-test: a test that does not exist anywhere in this suite
+file: src/server/db/scoped.ts
+count: 1
+@@FIND
+ * The narrow query surface
+@@REPLACE
+ * The narrow query surface (negative control edit; no behaviour changes)
+@@END

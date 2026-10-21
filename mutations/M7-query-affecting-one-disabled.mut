@@ -1,0 +1,27 @@
+# M7 — queryAffectingOne's row-count assertion disabled.
+#
+# V7: a failing RLS USING clause affects ZERO rows and raises NOTHING, reproduced three
+# ways. V19: a cross-user DELETE returns `DELETE 0`, byte-identical to deleting a
+# nonexistent id. `queryAffectingOne` is the code that turns that silence into a
+# RowCountError, so with the assertion disabled a DENIED write returns success to its
+# caller.
+#
+# It stayed green at 44/44 because the suite's cross-user write assertions went through
+# psql and read the row count themselves, never through queryAffectingOne.
+#
+# Both directions are named, and deliberately: `if (false)` admits zero rows AND admits
+# five. A control that only tested the zero case would pass against `rowCount < 1`.
+id: M7
+title: queryAffectingOne's `rowCount !== 1` assertion replaced by `if (false)`
+expect: caught
+proves: the V7 silence-is-not-success assertion rejects BOTH too few and too many affected rows
+expect-test: raises RowCountError when the update affects ZERO rows
+expect-test: raises RowCountError when the update affects MORE than one row
+
+file: src/server/db/scoped.ts
+count: 1
+@@FIND
+    if (result.rowCount !== 1) {
+@@REPLACE
+    if (false) {
+@@END

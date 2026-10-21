@@ -1,0 +1,21 @@
+# M10 — the production role guard's CREATEDB predicate made unmatchable.
+#
+# A/B partner to M9: the same drift, the same carrier role (statesman_owner, reached by
+# statesman_migrator), the same shape of control. Both are CAUGHT; if one ever regresses to
+# ESCAPED while the other does not, the difference is the control and not the harness.
+#
+# CREATEDB matters on its own because a role that can create a database owns it, and inside
+# a database it owns it is free of this schema's policies and grants entirely.
+id: M10
+title: privileged-role's CREATEDB reason is ANDed with false, so no role ever matches it
+expect: caught
+proves: the production role guard's CREATEDB predicate has a control that names the reason it reported
+expect-test: CREATEDB: refuses a connection that can SET ROLE to a role holding CREATEDB
+
+file: src/server/db/privileged-role.ts
+count: 1
+@@FIND
+    sql: (a) => `${a}.rolcreatedb`,
+@@REPLACE
+    sql: (a) => `${a}.rolcreatedb and false`,
+@@END

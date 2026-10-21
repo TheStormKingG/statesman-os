@@ -105,6 +105,9 @@ These are not assumptions. **Do not re-litigate these from memory.**
 | V30 | **`ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` is a silent no-op.** Tested in the canonical form, issued by the owner role, single schema: `pg_default_acl` stayed empty and a function created afterwards still had `proacl = NULL` with `has_function_privilege('public', oid, 'execute') = true`. The instrument was validated: an explicit `REVOKE` on the same function flipped it to `false` with `proacl = {sp_owner=X/sp_owner}`. By contrast `ALTER DEFAULT PRIVILEGES … GRANT EXECUTE … TO <role>` **does** apply, and the resulting ACL is `{=X/owner, owner=X/owner, role=X/owner}` — the leading `=X` is PUBLIC, carried in from the built-in default. | **This invalidates the "structural half" claim in §4.2.** `ALTER DEFAULT PRIVILEGES` cannot remove the built-in PUBLIC `EXECUTE` default, because `REVOKE` only deletes rows from `pg_default_acl` and never records a negative default. The only working control is an explicit `REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA … FROM PUBLIC` **after** the functions exist, repeated at the end of every migration, with `verify_security_posture()` rule 4 as the enforcing gate rather than a backstop. |
 | V31 | A `BEFORE UPDATE` trigger whose common-case early `return NEW` sits in front of an invariant check makes that check **unreachable for exactly the case it guards**. Reproduced: a tampering edit to a submitted row took the `prospective = OLD.state` branch and committed. Moving the frozen-draft check above the short-circuit yields `ST003` as intended, with a positive control confirming draft edits on unsubmitted rows still succeed | Invariant checks go **first** in a trigger body. An early return is an optimisation and must never precede a guard. |
 | V32 | `decision_revision`'s append-only triggers block `DELETE` and `TRUNCATE` **for the table owner as well**, so fixture teardown cannot use either. Reproduced: the owner's `delete from decision_revision` raised `ST001` | Confirms §8.3's choice of per-worker template-cloned databases dropped at teardown. A fixture that needs to reset in place must `ALTER TABLE … DISABLE TRIGGER USER` and re-enable, bracketed like the `NO FORCE`/`FORCE` rule. |
+| V33 | **zod 4's `z.uuid()` rejects this project's identifiers.** It enforces the RFC 9562 version nibble `[1-8]` and variant nibble `[89abAB]`. Executed: `z.uuid()` REJECTS `aaaaaaaa-0000-0000-0000-000000000001` **and** the reserved sentinel `00000000-0000-0000-0000-00000000dead`; `z.guid()` accepts both. Postgres's `uuid` type performs no version check and accepts any 8-4-4-4-12 hex string | The validator was **stricter than the column it guards**, and would have rejected values the database considers legal — in the fixtures as well as the data path. Use `z.guid()` for every identifier. It fails closed, so the symptom is a wall of refusals in code that looks careful. A unit test asserts the real ids parse and that `z.uuid()` would have rejected them, so nobody "tidies" it back. |
+| V34 | **`statesman_owner` is privileged without being superuser or `BYPASSRLS`** — it merely owns all 6 public relations, and ownership bypasses RLS (V4). `statesman_migrator` is a MEMBER of it. Measured: `rolsuper=false, rolbypassrls=false` for both | A "is this role privileged" predicate reading only role attributes **passes the migrator**, and with `trust` auth (V1) a one-character typo in `APP_DATABASE_URL` connects as it, from where `SET ROLE statesman_owner` then `ALTER TABLE … NO FORCE` is available. The privilege predicate must also count *owning a relation in public*, plus `rolcreaterole`, `rolcreatedb`, and membership in `pg_read_all_data` / `pg_write_all_data` — each of which was separately shown to slip through. |
+| V35 | **In the shared-worker test database, an unscoped `count(*)` measures scheduling order, not behaviour.** `vitest.integration.config.ts` sets `isolate: false`, giving each worker one clone shared by every file it runs. Observed in two independent files: `state-machine.test.ts` failed with 13 and with 20 against an expected 1; `forgery.test.ts` was green in 7 of 9 runs and deterministically red under `--maxWorkers=1`, failing in an `afterAll` **after all 75 assertions had reported passing** | Every count in an integration test is scoped to the rows the file owns. Enforced by `tests/unit/no-unscoped-counts.test.ts`, a source gate with a reasoned opt-out marker, because two authors who could not see each other's work reached for the same construct — which makes it a contract problem rather than a discipline problem. |
 
 ---
 
@@ -710,6 +713,41 @@ A requirement is `PASS` only if a tagged test exists, ran, and passed. **Unexecu
 `NOT RUN`, never `PASSED`.** `gates:selftest` fixtures assert deep equality against an
 expected per-requirement object, not an exit code — five fixtures asserting only
 `code === 2` let a checker that returns 0/2 pass seven of ten.
+
+### 8.6b Mutation testing is a gate, not an exercise
+
+§8's rule — *a test that cannot be made to fail has not been shown to work* — was a
+doctrine nothing enforced. An adversarial pass then mutated the guards one at a time and
+found **eight whose removal left the suite green at 44/44**, including `DISCARD ALL`, which
+§7.6 names a release blocker, and `decision_revision`'s tenancy `WITH CHECK`, whose
+weakening was additionally shown to be exploitable by forging a revision carrying another
+user's id.
+
+So the harness is now permanent: `scripts/mutation-check.sh`, wired into `scripts/gates.sh`
+and `npm run mutation`. For each registered mutation it mirrors the repo, applies one
+change, builds that mirror its own template database, runs the suite, and asserts the suite
+goes non-zero **and that the expected test failed**.
+
+Four properties are load-bearing, each from a failure already observed here:
+
+1. **A green baseline first.** A harness that cannot produce a green unmutated suite reports
+   every mutation as caught. An earlier script of exactly this kind treated *any* non-zero
+   exit as detection and would have reported success on all six of its mutations while
+   testing nothing.
+2. **Match the expected test, not any failure.** "Something failed" is not evidence the
+   right thing failed.
+3. **Catcher specificity.** `expect-test` is a substring, and a catcher named `e` was shown
+   to make the gate print `GATE PASSED`. Every catcher must now resolve to **exactly one**
+   test in the baseline inventory, checked once against the green baseline. Verified by
+   re-running that exploit: `SPEC FAIL … matches 75 baseline tests (need exactly 1)`.
+4. **`--only` keeps the self-tests.** It previously filtered the whole registry, so
+   `--only M5` exited 0 having never run `MS1`/`MS2`, the gate's own positive controls — a
+   scoped run reported as a controlled one.
+
+**Standing rule: a new security guard ships with a mutation proving its control bites.**
+Current state: 15 mutations registered, 15 caught, verified by an independent agent that
+built its own mirror, applier, reporter-parser and template database so it trusted no part
+of `mutations/lib`.
 
 ### 8.7 CI order
 

@@ -1,0 +1,22 @@
+# M12 — the production role guard's pg_write_all_data predicate made unmatchable.
+#
+# A/B partner to M11. pg_write_all_data confers INSERT/UPDATE/DELETE on every table,
+# including the append-only and immutable ones, and like its read counterpart it sets
+# neither rolsuper nor rolbypassrls.
+#
+# The two are kept as SEPARATE reasons rather than one `rolname in (…)` precisely so this
+# mutation exists: with a single combined predicate, one control would cover both and
+# neither would be shown to have its own.
+id: M12
+title: privileged-role's PG_WRITE_ALL_DATA reason compares rolname to a role that cannot exist
+expect: caught
+proves: the production role guard notices membership of pg_write_all_data independently of pg_read_all_data
+expect-test: PG_WRITE_ALL_DATA: refuses a connection with membership of pg_write_all_data
+
+file: src/server/db/privileged-role.ts
+count: 1
+@@FIND
+    sql: (a) => `${a}.rolname = 'pg_write_all_data'`,
+@@REPLACE
+    sql: (a) => `${a}.rolname = '__never_a_role__'`,
+@@END

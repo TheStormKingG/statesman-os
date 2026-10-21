@@ -1,0 +1,29 @@
+# MS1 — the harness's own POSITIVE CONTROL. Read this row first.
+#
+# Rule 4 was the one posture rule that already had a dedicated control when this harness
+# was built, so breaking it MUST turn the suite red. If MS1 ever reports anything but
+# CAUGHT, the gate itself is broken — the mirror is not being used, the mutation is not
+# landing, or the suite is not running — and every verdict in the same report is
+# worthless.
+#
+# MS1 and MS2 are also the standing proof that the MIRROR is what runs. Vite resolves its
+# project root by walking up to a package.json and taking its real path, so a symlinked
+# package.json can silently make the real repository the root. A mutated mirror that goes
+# red cannot be the real repo.
+#
+# It is the A/B partner to M5 and M6: same function, same kind of edit, three rules.
+id: MS1
+title: posture rule 4 (NO PUBLIC EXEC) made unmatchable by renaming the schema filter
+expect: caught
+proves: the gate can observe a red integration suite and attribute it to a named test
+proves: the mutated MIRROR is what ran, not the real checkout
+proves: posture rule 4 has a working control (canon 4.8 rule 4, V2, V30)
+expect-test: raises ST099 for a function created with the default PUBLIC EXECUTE
+
+file: migrations/0005_verify_security_posture.sql
+count: 1
+@@FIND
+    where n.nspname in ('app','public') and has_function_privilege('public', p.oid, 'EXECUTE')
+@@REPLACE
+    where n.nspname in ('__never_a_schema__') and has_function_privilege('public', p.oid, 'EXECUTE')
+@@END

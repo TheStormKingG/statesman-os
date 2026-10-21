@@ -1,0 +1,28 @@
+# M2 — withUser's eager `app.require_user_id()` probe replaced by a self-agreeing local row.
+#
+# The probe always WORKED: redefining app.require_user_id() to return a foreign uuid makes
+# withUser reject with ContextMismatchError before the callback runs. What it lacked was a
+# control. Replacing the round trip with a local object that agrees with itself by
+# construction left the suite green at 44/44, so nothing could tell the probe from its
+# absence.
+#
+# Why the probe exists (canon 6.1 step 4, V6): with no context set, a point lookup by a
+# nonexistent uuid returns rc=0, zero rows and NO error. The probe is what turns a missing
+# or mismatched context into a loud failure independently of query shape.
+#
+# Note the mutation keeps the SHAPE of the result — rows, one element, a user_id field
+# that matches — so every assertion downstream of the probe still passes. Only the round
+# trip is gone. A control that merely checked the probe's return value would not notice.
+id: M2
+title: withUser's eager `select app.require_user_id()` replaced by a self-agreeing local row
+expect: caught
+proves: the eager context probe (canon 6.1 step 4, V6) is exercised by a real round trip
+expect-test: rejects with ContextMismatchError when app.require_user_id() disagrees
+
+file: src/server/db/scoped.ts
+count: 1
+@@FIND
+  const probe = await client.query(REQUIRE_USER_SQL)
+@@REPLACE
+  const probe = { rows: [{ user_id: userId }] }
+@@END

@@ -1,0 +1,33 @@
+# M3 — `assertUnprivilegedOnce()` deleted from withUser.
+#
+# V1: pg_hba is `trust` for local connections, so a one-character typo in
+# APP_DATABASE_URL connects SUCCESSFULLY as whatever role it names, with no password
+# error. statesman_migrator is a MEMBER of statesman_owner, and ownership bypasses RLS
+# without rolsuper or rolbypassrls (V4) — so the typo'd URL yields a connection for which
+# every tenancy policy is inert, and the only thing that notices is this call.
+#
+# It stayed green at 44/44 because the integration harness has its own role guard
+# (assertTestConnectionIdentity) which IS fatal — but it runs on a psql connection, not on
+# the pg pool withUser uses, so it cannot see the production guard disappear.
+#
+# The two named catchers are the V3 and V1 legs respectively: the migrator (privileged
+# only by MEMBERSHIP, which a rolsuper/rolbypassrls predicate passes) and the cluster
+# superuser. A guard that checked attributes alone would reject the second and admit the
+# first, so one catcher is not enough.
+id: M3
+title: `await assertUnprivilegedOnce()` deleted from withUser's body
+expect: caught
+proves: the production role assertion (canon 6.1 step 1, V1/V3/V4) rejects BOTH an attribute-privileged and a membership-privileged role
+expect-test: refuses statesman_migrator, which a rolsuper/rolbypassrls-only predicate would pass
+expect-test: refuses the cluster superuser, naming the SUPERUSER attribute
+
+file: src/server/db/scoped.ts
+count: 1
+@@FIND
+export async function withUser<T>(fn: (db: UserScopedClient) => Promise<T>): Promise<T> {
+  await assertUnprivilegedOnce()
+  const session = await resolveSession()
+@@REPLACE
+export async function withUser<T>(fn: (db: UserScopedClient) => Promise<T>): Promise<T> {
+  const session = await resolveSession()
+@@END

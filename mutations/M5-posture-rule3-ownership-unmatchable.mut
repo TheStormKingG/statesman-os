@@ -1,0 +1,24 @@
+# M5 — posture rule 3 (OWNERSHIP) made unmatchable.
+#
+# V4: table OWNERSHIP bypasses RLS under ENABLE independently of rolsuper and
+# rolbypassrls. Rule 3 is the only thing in the schema that notices statesman_app owning
+# a public table. When the adversarial pass ran, posture.test.ts carried controls for
+# rules 4, 1, 2, 5, 6 and 8 and none for rule 3, so the rule could be made to match
+# nothing and the suite stayed green at 44/44.
+#
+# A/B partner: MS1 breaks rule 4 in the same function and the same way. Both are CAUGHT
+# now; if one ever regresses to ESCAPED while the other does not, the difference is the
+# control and not the harness.
+id: M5
+title: posture rule 3 OWNERSHIP compares relowner to a role name that cannot exist
+expect: caught
+proves: posture rule 3 (canon 4.8 rule 3, V4) has a control that names the offending table
+expect-test: [M5] raises ST099 for a public table owned by statesman_app
+
+file: migrations/0005_verify_security_posture.sql
+count: 1
+@@FIND
+      and pg_get_userbyid(c.relowner) = 'statesman_app'
+@@REPLACE
+      and pg_get_userbyid(c.relowner) = '__never_a_role__'
+@@END

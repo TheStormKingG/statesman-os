@@ -1,0 +1,29 @@
+# M9 — the production role guard's CREATEROLE predicate made unmatchable.
+#
+# WHY THIS PREDICATE EXISTS. The production guard (POSTURE_SQL in pool.ts) and the harness
+# guard (assertTestConnectionIdentity) are supposed to state one rule, and they had
+# DRIFTED: the harness tested rolcreaterole, rolcreatedb and membership of
+# pg_read_all_data / pg_write_all_data, and production tested NONE of them. The harness
+# holding the stricter rule is the worst direction for that drift, because the suite's job
+# is to notice a weakness on the production side — a role that had acquired CREATEROLE was
+# refused by the tests and ACCEPTED by the application.
+#
+# WHY THE CATCHER ASSERTS A REASON CODE AND NOT JUST A REJECTION. Pointing a pool at
+# statesman_migrator ALREADY fails, and did before this predicate existed: the migrator is
+# a member of statesman_owner, which owns every public relation, and ownership bypasses RLS
+# (V4). So "a PrivilegeAssertionError was thrown" is worth nothing here — it stays true
+# with this predicate deleted. The named test asserts the guard reports CREATEROLE
+# specifically, which is the only thing this mutation can take away.
+id: M9
+title: privileged-role's CREATEROLE reason is ANDed with false, so no role ever matches it
+expect: caught
+proves: the production role guard's CREATEROLE predicate has a control that names the reason it reported
+expect-test: CREATEROLE: refuses a connection that can SET ROLE to a role holding CREATEROLE
+
+file: src/server/db/privileged-role.ts
+count: 1
+@@FIND
+    sql: (a) => `${a}.rolcreaterole`,
+@@REPLACE
+    sql: (a) => `${a}.rolcreaterole and false`,
+@@END

@@ -1,0 +1,32 @@
+# M1 — the forgery hole. PROVED EXPLOITABLE before it was controlled.
+#
+# With this WITH CHECK in place, an adversarial agent inserted a decision_revision row
+# carrying user A's user_id while connected as statesman_app under user B's context, and
+# it SUCCEEDED. The suite stayed green at 44/44 — tenancy.test.ts asserted the WITH CHECK
+# on `decision` and there was no equivalent for `decision_revision`, while posture rule 8
+# passed because the weakened predicate still mentions require_user_id.
+#
+# A control has since landed. This mutation is the standing proof that it bites, and the
+# A/B partner to MS2: same kind of weakening, the other table.
+#
+# The second named catcher matters as much as the first: it asserts that the forged-owner
+# and foreign-parent cases report DIFFERENT SQLSTATEs, so neither control can be standing
+# in for the other.
+id: M1
+title: decision_revision tenancy WITH CHECK weakened to a bare `require_user_id() is not null`
+expect: caught
+proves: a cross-user INSERT forgery into the append-only revision table is rejected, and seen to be
+expect-test: B inserting a decision_revision under A's user_id is rejected by the WITH CHECK
+expect-test: the forged-owner and foreign-parent cases report different SQLSTATEs
+
+file: migrations/0003_decision.sql
+count: 1
+@@FIND
+create policy decision_revision_tenancy on public.decision_revision
+  using (user_id = app.require_user_id())
+  with check (user_id = app.require_user_id());
+@@REPLACE
+create policy decision_revision_tenancy on public.decision_revision
+  using (user_id = app.require_user_id())
+  with check (app.require_user_id() is not null);
+@@END

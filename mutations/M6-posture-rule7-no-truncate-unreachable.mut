@@ -1,0 +1,19 @@
+# M6 — posture rule 7 (NO TRUNCATE) made unreachable.
+#
+# V15: TRUNCATE bypasses row-level BEFORE UPDATE/DELETE triggers, so decision_revision's
+# append-only guarantee rests on BEFORE TRUNCATE statement triggers AND on the absence of
+# the TRUNCATE grant. Rule 7 is the check on the second half. Like rule 3, it had no
+# control when the adversarial pass ran and `if false then` left the suite green at 44/44.
+id: M6
+title: posture rule 7 NO TRUNCATE replaced by `if false then`
+expect: caught
+proves: posture rule 7 (canon 4.8 rule 7, V15) has a control
+expect-test: [M6] raises ST099 for TRUNCATE granted to statesman_app on decision_revision
+
+file: migrations/0005_verify_security_posture.sql
+count: 1
+@@FIND
+  if has_table_privilege('statesman_app','public.decision_revision','TRUNCATE') then
+@@REPLACE
+  if false then
+@@END

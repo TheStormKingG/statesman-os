@@ -1,0 +1,24 @@
+# M11 — the production role guard's pg_read_all_data predicate made unmatchable.
+#
+# pg_read_all_data sets NEITHER rolsuper NOR rolbypassrls, so an attribute check passes it
+# completely — and it confers SELECT on every table in every schema. Canon §4.6 protects
+# app_user, user_session and auth_attempt by GRANT ABSENCE rather than by RLS: the app role
+# simply holds no privilege on them. Membership of pg_read_all_data defeats that protection
+# without touching a single policy or role attribute.
+#
+# It is a RESERVED role name — `ALTER ROLE pg_read_all_data …` is refused by the server
+# ("Cannot alter reserved roles", measured) — so membership is the only way to acquire it,
+# which is exactly the path the reachability test covers.
+id: M11
+title: privileged-role's PG_READ_ALL_DATA reason compares rolname to a role that cannot exist
+expect: caught
+proves: the production role guard notices membership of pg_read_all_data, which no attribute check sees
+expect-test: PG_READ_ALL_DATA: refuses a connection with membership of pg_read_all_data
+
+file: src/server/db/privileged-role.ts
+count: 1
+@@FIND
+    sql: (a) => `${a}.rolname = 'pg_read_all_data'`,
+@@REPLACE
+    sql: (a) => `${a}.rolname = '__never_a_role__'`,
+@@END

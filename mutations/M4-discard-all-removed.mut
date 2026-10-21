@@ -1,0 +1,32 @@
+# M4 — the `DISCARD ALL` block deleted from finishScopedTransaction.
+#
+# Canon 7.6 names pooled-identity leak across two sequential requests on one warmed
+# client a RELEASE BLOCKER. DISCARD ALL always worked: on a reused backend (same
+# pg_backend_pid) it clears a planted session-level GUC and a prepared statement. It had
+# no control, so the release blocker was unguarded by the suite.
+#
+# Removing the block also removes the `tainted` write that a FAILING DISCARD ALL performs,
+# so a connection whose state could not be cleared is returned to the pool instead of
+# being destroyed (V5: a set_config with is_local=false survives the COMMIT).
+#
+# The named catcher asserts the same-backend condition explicitly — without it, two calls
+# landing on two different pooled connections would pass whether or not anything was
+# discarded.
+id: M4
+title: the `DISCARD ALL` block deleted from finishScopedTransaction
+expect: caught
+proves: canon 7.6's pooled-identity-leak release blocker is controlled, on one proven-reused backend
+expect-test: a session GUC and a prepared statement planted in call 1 are GONE in call 2 on the SAME backend
+
+file: src/server/db/scoped.ts
+count: 1
+@@FIND
+  try {
+    await client.query('discard all')
+  } catch {
+    tainted = true
+  }
+  client.release(tainted ? true : undefined)
+@@REPLACE
+  client.release(tainted ? true : undefined)
+@@END

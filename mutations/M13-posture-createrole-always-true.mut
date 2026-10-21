@@ -1,0 +1,29 @@
+# M13 — the CREATEROLE predicate made ALWAYS TRUE (opposite polarity to M9).
+#
+# M9..M12 each delete a predicate and prove a control notices its absence. That family
+# cannot detect the opposite failure: a predicate that matches EVERYTHING. An
+# always-matching predicate makes the guard refuse connections for reasons that are not
+# true of them, and — worse for the suite — it makes every "the message names this reason"
+# assertion in role-guard-predicates.test.ts pass WITHOUT its carrier mutation. Those four
+# controls would then be measuring nothing, while still reporting green.
+#
+# The catcher is the `baseline` test, whose whole job is to assert that with NO carrier
+# applied, none of the four new reason codes is reported. It is the control on the controls,
+# and this mutation is what shows it has teeth.
+#
+# Note the positive control is NOT expected to fail here: statesman_app reaches no role at
+# all, so the reachability filter keeps its verdict clean however permissive the privilege
+# predicate becomes. That asymmetry is the point of having both tests.
+id: M13
+title: privileged-role's CREATEROLE reason is ORed with true, so every role matches it
+expect: caught
+proves: the `baseline` test keeps the four reason-code assertions honest — a predicate that matches everything is caught, not just one that matches nothing
+expect-test: baseline: statesman_migrator is refused for OWNERSHIP ONLY
+
+file: src/server/db/privileged-role.ts
+count: 1
+@@FIND
+    sql: (a) => `${a}.rolcreaterole`,
+@@REPLACE
+    sql: (a) => `(${a}.rolcreaterole or true)`,
+@@END
