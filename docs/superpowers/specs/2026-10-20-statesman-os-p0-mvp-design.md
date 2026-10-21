@@ -102,6 +102,9 @@ These are not assumptions. **Do not re-litigate these from memory.**
 | V27 | Postgres requires `LC_ALL` set on this macOS build or the postmaster aborts: *postmaster became multithreaded during startup* | Runbook and all scripts export `LC_ALL=en_US.UTF-8`. |
 | V28 | **`NEW.<col>` is NULL in a `BEFORE UPDATE` trigger when that column is `GENERATED`.** Reproduced: `BEFORE: OLD.state=[draft] NEW.state=[<NULL>]`, while `AFTER` correctly reports `[submitted]` | A `BEFORE UPDATE` trigger comparing `OLD.state → NEW.state` compares against NULL on every transition, so it permits everything or rejects everything. **A transition trigger must never read `NEW.state`.** |
 | V29 | An `IMMUTABLE` user-defined SQL function **is** accepted in a `GENERATED ALWAYS AS … STORED` expression, and the same function can derive the prospective state inside the `BEFORE UPDATE` trigger. Reproduced end to end: legal transition permitted, illegal transition raised `ST001` | One definition serves both the column and the guard, so they cannot drift. This supersedes the inline-CASE approach of V12. |
+| V30 | **`ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` is a silent no-op.** Tested in the canonical form, issued by the owner role, single schema: `pg_default_acl` stayed empty and a function created afterwards still had `proacl = NULL` with `has_function_privilege('public', oid, 'execute') = true`. The instrument was validated: an explicit `REVOKE` on the same function flipped it to `false` with `proacl = {sp_owner=X/sp_owner}`. By contrast `ALTER DEFAULT PRIVILEGES … GRANT EXECUTE … TO <role>` **does** apply, and the resulting ACL is `{=X/owner, owner=X/owner, role=X/owner}` — the leading `=X` is PUBLIC, carried in from the built-in default. | **This invalidates the "structural half" claim in §4.2.** `ALTER DEFAULT PRIVILEGES` cannot remove the built-in PUBLIC `EXECUTE` default, because `REVOKE` only deletes rows from `pg_default_acl` and never records a negative default. The only working control is an explicit `REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA … FROM PUBLIC` **after** the functions exist, repeated at the end of every migration, with `verify_security_posture()` rule 4 as the enforcing gate rather than a backstop. |
+| V31 | A `BEFORE UPDATE` trigger whose common-case early `return NEW` sits in front of an invariant check makes that check **unreachable for exactly the case it guards**. Reproduced: a tampering edit to a submitted row took the `prospective = OLD.state` branch and committed. Moving the frozen-draft check above the short-circuit yields `ST003` as intended, with a positive control confirming draft edits on unsubmitted rows still succeed | Invariant checks go **first** in a trigger body. An early return is an optimisation and must never precede a guard. |
+| V32 | `decision_revision`'s append-only triggers block `DELETE` and `TRUNCATE` **for the table owner as well**, so fixture teardown cannot use either. Reproduced: the owner's `delete from decision_revision` raised `ST001` | Confirms §8.3's choice of per-worker template-cloned databases dropped at teardown. A fixture that needs to reset in place must `ALTER TABLE … DISABLE TRIGGER USER` and re-enable, bracketed like the `NO FORCE`/`FORCE` rule. |
 
 ---
 
@@ -130,15 +133,32 @@ connects only as `statesman_app`.
 ### 4.2 Privileges fail closed
 
 ```sql
--- functions: PUBLIC gets EXECUTE by default (V2) — this is the critical pair
-revoke all on all functions in schema public, app from public;
-alter default privileges in schema public, app revoke execute on functions from public;
+-- Functions are created with EXECUTE granted to PUBLIC (V2).
+-- The ONLY statement that removes it is an explicit REVOKE, after the functions exist:
+revoke execute on all functions in schema app    from public;
+revoke execute on all functions in schema public from public;
 -- then GRANT EXECUTE per function, explicitly, one line each.
 
 -- tables: deliberately NO `alter default privileges ... grant`.
 -- Each migration grants per table. A forgotten grant yields an INVISIBLE table
 -- (fails closed), not an EXPOSED one (fails open).
 ```
+
+> **There is no structural default here, and an earlier version of this section claimed
+> there was.** `ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` is a
+> silent no-op (V30): `REVOKE` only deletes rows from `pg_default_acl`, it never records a
+> negative default, so the built-in PUBLIC `EXECUTE` survives. Worse, `ALTER DEFAULT
+> PRIVILEGES … GRANT` *does* work, and the ACL it materialises **carries the PUBLIC grant
+> along with it** (`{=X/owner, …}`), so adding a convenience default makes the exposure
+> look configured.
+>
+> Consequences, all mandatory:
+> 1. The two `REVOKE … ON ALL FUNCTIONS IN SCHEMA … FROM PUBLIC` statements run at the
+>    **end of every migration that creates a function**, not once at bootstrap.
+> 2. `verify_security_posture()` rule 4 is the **primary** control for this hazard, not a
+>    backstop, because nothing prevents the next function from being PUBLIC-executable.
+> 3. The posture check must therefore run at the end of every migration run in every
+>    environment, which §4.8 already requires. That requirement is now load-bearing.
 
 ### 4.3 RLS
 
@@ -210,6 +230,18 @@ RLS never encodes transitions (V7, and it makes 404 indistinguishable from 409).
   Required control: a meta-test over **all 32 combinations** of the five milestone
   timestamps asserting that the function's result and the stored column agree, so the
   column and the guard cannot diverge.
+
+  > **Invariant checks go first in the trigger body.** The guard also enforces that a
+  > submitted decision's `draft_payload` is frozen. An earlier version put the common-case
+  > `if prospective = OLD.state then return NEW; end if;` short-circuit *above* that check,
+  > which made it unreachable for precisely the case it guards: a tampering edit to a
+  > submitted row moves no milestone, so it took the early return and committed (V31,
+  > reproduced). The frozen check now precedes the short-circuit, uses `is distinct from`
+  > rather than `<>` so a NULL payload is handled, and carries a positive control asserting
+  > that draft edits on unsubmitted rows still succeed.
+  >
+  > Generalised: an early return is an optimisation. An optimisation placed in front of a
+  > guard deletes the guard for the fast path, and the fast path is usually the attack.
 - **Immutability** of a submitted revision is enforced by `BEFORE UPDATE OR DELETE`
   triggers **and** `BEFORE TRUNCATE … FOR EACH STATEMENT` (V15) **and** absent grants.
 - **Every privileged write asserts its row count:**
@@ -257,6 +289,52 @@ app.get_profile() returns table(...)
 `app_user`, `user_session` and `auth_attempt` receive **no direct grants** to
 `statesman_app`. Grant-absence is strictly stronger than RLS, and it removes the
 `FORCE` + INSERT contradiction that would otherwise make user creation impossible.
+
+### 4.6b The lifecycle path
+
+`statesman_app` holds `GRANT UPDATE (draft_payload)` on `decision` and nothing more, so it
+**cannot write a milestone timestamp at all**. Verified: a direct
+`update decision set submitted_at = now()` as the app role raises `42501 permission
+denied`. That is the intended design, and an earlier version of this spec left no legal
+writer for those columns, which would have blocked the whole lifecycle.
+
+Every transition therefore goes through a `SECURITY DEFINER` function owned by
+`statesman_owner`, each with `set search_path = pg_catalog, app, public`, each granted
+`EXECUTE` to `statesman_app` only:
+
+```
+app.submit_decision(p_decision_id, p_token, p_content, p_confidence, p_rationale)
+    returns table (revision_id uuid, revision_no integer, replayed boolean)
+app.append_revision(p_decision_id, p_token, p_content, p_confidence, p_rationale)
+app.mark_challenged(p_decision_id)
+app.record_reflection(p_decision_id, p_notes)
+app.record_action(p_decision_id, …)
+app.close_decision(p_decision_id)
+app.save_draft(p_decision_id, p_payload)   -- NOT a definer function; direct UPDATE on the
+                                           -- granted column, which keeps the hot path cheap
+```
+
+`app.submit_decision` is the pattern for all of them, and all four of its properties are
+verified:
+
+1. **Identity is derived, never passed.** `me := app.require_user_id()`. No function takes a
+   user id as a parameter (V2's exploit class).
+2. **The row lock is the arbitration.** `select … where id = … and user_id = me and
+   submitted_at is null for update` before any write. Two concurrent submits serialise on
+   the lock rather than racing.
+3. **Idempotency precedes the lock.** A replay of the same `idempotency_token` returns the
+   existing revision with `replayed = true` instead of raising. Verified: a second call
+   returned `rev=1 replayed=true` and the revision count stayed at 1.
+4. **The row count is asserted.** `get diagnostics n = row_count; if n <> 1 then raise …
+   using errcode = 'ST005'`, because a failing policy affects zero rows and raises nothing
+   (V7).
+
+Because policies omit the `TO` clause and the GUC is transaction-local rather than
+role-scoped, `app.require_user_id()` inside a definer function still resolves to the
+*caller's* identity even though the function executes as the owner. So a definer function
+is scoped to the caller's own rows by the same policy that scopes the app role. Verified:
+user B calling `app.submit_decision` against user A's decision raised `ST010`, not a
+successful hijack.
 
 ### 4.7 Views
 
