@@ -36,3 +36,7 @@ npm-debug.log*
 
 # mutation harness scratch
 /mutations/.work/
+
+# Supabase CLI local state (can contain pooler URLs and keys)
+supabase/.temp/
+.env.supabase.local

@@ -1,0 +1,38 @@
+# M16 — the claim-to-source composite FK narrowed to a single column.
+#
+# WHAT THE GUARD PROTECTS. canon §7.3 item 2: grounding is RELATIONAL, not an application
+# check. `scenario_claim`'s foreign key is over `(source_id, scenario_version_id)` against
+# `source (id, scenario_version_id)`, so a claim cannot cite a source attached to a
+# different scenario_version. That is the constraint the Slice 4 citation tables extend:
+# a citation row carries a composite FK to the whole (version, source, claim) triple, and
+# a fabricated citation is therefore unpersistable rather than merely rejected by a check
+# somebody has to remember to write.
+#
+# This mutation keeps the constraint NAME and keeps a foreign key — it only drops the
+# version column from both sides. The narrowed version still references a unique column
+# (`source`'s primary key), so the schema is valid, the seed still applies (every seeded
+# claim cites a source in its own version, so the narrower constraint is satisfied), and
+# no CTRL block or posture rule reads `pg_get_constraintdef` for this table. The whole
+# difference is that a claim pinned to version B may now cite a source belonging to
+# version A — which is precisely the fabricated citation FR-02 exists to make impossible.
+#
+# WHAT A CAUGHT VERDICT ESTABLISHES. That the cross-version insert is REFUSED and is seen
+# to be refused with the specific SQLSTATE and the specific constraint name, rather than
+# with "an error" that the claim-id shape check or the confidence domain would also
+# produce. The named test also reads the constraint definition back from the catalog, so
+# the shape the citation tables will reference is asserted and not assumed.
+id: M16
+title: scenario_claim's source FK drops scenario_version_id from both sides, so a cross-version citation persists
+expect: caught
+proves: a fabricated citation is unpersistable by schema constraint, and the constraint shape is observed
+expect-test: a fabricated citation is unpersistable: the composite FK rejects a (source_id, scenario_version_id) pair that does not exist
+
+file: migrations/0008_scenario_content.sql
+count: 1
+@@FIND
+  constraint scenario_claim_source_fk foreign key (source_id, scenario_version_id)
+    references public.source (id, scenario_version_id) on delete restrict,
+@@REPLACE
+  constraint scenario_claim_source_fk foreign key (source_id)
+    references public.source (id) on delete restrict,
+@@END

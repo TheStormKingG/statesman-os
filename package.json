@@ -7,6 +7,8 @@
     "node": ">=20.9.0"
   },
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
     "db:bootstrap": "bash scripts/db-bootstrap.sh",
     "db:migrate": "bash scripts/migrate.sh",
     "db:template": "bash scripts/db-template.sh",

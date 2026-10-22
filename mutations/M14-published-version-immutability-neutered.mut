@@ -1,0 +1,39 @@
+# M14 — the ST020 publish gate on scenario_version, neutered.
+#
+# WHAT THE GUARD PROTECTS. canon §4.4 and FR-04: a published scenario_version must not
+# change underneath a submitted decision. `app.guard_published_reference()` is the only
+# row-level control between an owner-run UPDATE/DELETE and content moving under a
+# decision that was already taken against it; the app role never reaches it, because it
+# holds no UPDATE or DELETE grant at all. V32 is why the trigger is role-independent: an
+# append-only guard that exempted the owner would exempt every migration.
+#
+# WHY `when (false)` RATHER THAN DELETING THE FUNCTION. 0008's own CTRL-5 exercises the
+# ST020 gate at migration time, but it does so against PROBE ROWS IN `rubric_version`.
+# Removing the guard function, or editing its body, makes the MIGRATION fail — the suite
+# then produces no test results at all and the catch is attributable to CTRL-5 rather
+# than to any test. Attaching the trigger with a `WHEN (false)` clause disables it for
+# `scenario_version` ONLY, so CTRL-5 still passes, the template still builds, and the
+# question "does an integration test notice that a published case is no longer frozen?"
+# is asked cleanly. Attribution is the point of this registry (docs/mutation-testing.md
+# §4), and a mutation that aborts the build answers a different question.
+#
+# WHAT A CAUGHT VERDICT ESTABLISHES. That the frozen-published rule is covered for the
+# table a decision actually pins to, and not only for the rubric probe inside the
+# migration that creates it.
+id: M14
+title: the scenario_version publish-immutability trigger is attached WHEN (false), so ST020 never fires
+expect: caught
+proves: the ST020 publish gate on scenario_version has a control outside the migration that creates it
+expect-test: a published scenario_version refuses UPDATE and DELETE with ST020 while an unpublished one accepts both
+
+file: migrations/0008_scenario_content.sql
+count: 1
+@@FIND
+create trigger scenario_version_published_immutable
+  before update or delete on public.scenario_version
+  for each row execute function app.guard_published_reference();
+@@REPLACE
+create trigger scenario_version_published_immutable
+  before update or delete on public.scenario_version
+  for each row when (false) execute function app.guard_published_reference();
+@@END

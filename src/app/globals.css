@@ -1,0 +1,338 @@
+/*
+ * globals.css — the DESIGN.md token layer, and nothing else.
+ *
+ * Every colour value below is copied verbatim from DESIGN.md §2, where each one
+ * was contrast-verified (OKLCH -> sRGB -> WCAG relative luminance) and the
+ * ratios recorded. No value here was invented, adjusted or re-derived. If a
+ * colour is needed that is not in this file, DESIGN.md is the place to add it,
+ * because the ratio has to be computed before the token exists.
+ *
+ * Light is the primary theme; dark carries equal weight and is NOT an inversion
+ * (DESIGN.md §2). The dark block redefines the same token names, so no rule
+ * anywhere else in the app needs a theme-aware selector.
+ */
+
+/* ------------------------------------------------------------------ *
+ * Tokens — light (DESIGN.md §2)
+ * ------------------------------------------------------------------ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: oklch(0.985 0.004 75);
+  --surface: oklch(1 0 75);
+  --subtle: oklch(0.962 0.006 75);
+  --divider: oklch(0.9 0.007 75);
+  --border: oklch(0.64 0.012 75);
+  --fg: oklch(0.255 0.012 75);
+  --fg-muted: oklch(0.47 0.012 75);
+  --accent: oklch(0.7 0.125 75);
+  --accent-fg: oklch(0.235 0.03 75);
+  --accent-ink: oklch(0.54 0.11 75);
+  --danger: oklch(0.52 0.185 27);
+
+  /*
+   * DESIGN.md §4: one sans, one mono. Source Sans 3 for UI and prose,
+   * JetBrains Mono for identifiers, paths and version strings, chosen for its
+   * tabular figures.
+   *
+   * NOT self-hosted yet, and deliberately NOT linked to Google Fonts: DESIGN.md
+   * §4 requires self-hosting with `font-display: swap` and no `<link>` in
+   * production, and shipping webfont files is outside this slice. Until the
+   * files land these stacks fall through to the platform UI faces, so the
+   * rendered page is the fallback, not the specified type. Stated here so the
+   * gap is visible in the file rather than discovered in a screenshot.
+   */
+  --font-sans: 'Source Sans 3', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* DESIGN.md §5: 4px base. One radius system, three steps. */
+  --radius-chip: 2px;
+  --radius: 4px;
+  --radius-cell: 0;
+
+  /* DESIGN.md §6: entering is the default; in-out is for on-screen movement. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* ------------------------------------------------------------------ *
+ * Tokens — dark (DESIGN.md §2). Same names, different values.
+ * ------------------------------------------------------------------ */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: oklch(0.195 0.008 75);
+    --surface: oklch(0.235 0.009 75);
+    --subtle: oklch(0.275 0.01 75);
+    --divider: oklch(0.33 0.01 75);
+    --border: oklch(0.55 0.012 75);
+    --fg: oklch(0.945 0.006 75);
+    --fg-muted: oklch(0.73 0.01 75);
+    --accent: oklch(0.76 0.13 75);
+    --accent-fg: oklch(0.225 0.03 75);
+    --accent-ink: oklch(0.82 0.12 75);
+    --danger: oklch(0.68 0.17 27);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Base
+ * ------------------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/*
+ * NO `html { overflow-x: hidden }` HERE, DELIBERATELY.
+ *
+ * DESIGN.md §9 requires no horizontal page scroll at 320px, and hiding the
+ * overflow satisfies the letter of that while destroying the only instrument
+ * that can check it: with `overflow-x: hidden`, `scrollWidth` is clamped to
+ * `clientWidth`, so the 320px overflow detector canon §8.5 requires would
+ * report a clean page over content that genuinely spills, and could no longer
+ * fail on the `/__a11y-canary` 400px block it is supposed to catch.
+ *
+ * So the requirement is met by the layout instead: no fixed widths, a 16px
+ * gutter, `max-width` in `ch`, and `overflow-wrap` on the long mono strings.
+ * MEASURED at 320x720 against this page: `documentElement.scrollWidth` 320 ==
+ * `clientWidth` 320, and zero elements with a bounding rect extending past
+ * `clientWidth`. The second figure is the load-bearing one, because it is the
+ * one a mask could not have faked.
+ */
+
+body {
+  margin: 0;
+  /* An explicit background, so the page never inherits the UA default and the
+     dark theme is not a white flash with light text. */
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  /* DESIGN.md §4: body 16px minimum, never below. Line height 1.5. */
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ------------------------------------------------------------------ *
+ * Focus — DESIGN.md §3, two-tone, verbatim.
+ *
+ * Single-colour rings were ruled out by computation, not preference: no one
+ * colour reaches 3:1 against both a dark page and a light amber fill. The
+ * offset plus the inner `--surface` band keeps the ink ring measured against
+ * the page (15.11:1 light, 15.57:1 dark) rather than against a coloured fill.
+ * Removing the offset silently changes which pair WCAG compares.
+ * ------------------------------------------------------------------ */
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--surface);
+  border-radius: inherit;
+}
+
+/* ------------------------------------------------------------------ *
+ * Typography and flow
+ * ------------------------------------------------------------------ */
+
+h1,
+h2,
+h3 {
+  /* DESIGN.md §4: 1.25 for headings, weight 600. */
+  line-height: 1.25;
+  font-weight: 600;
+  margin: 0;
+  /* A long heading must wrap rather than widen the page. */
+  overflow-wrap: break-word;
+}
+
+h1 {
+  font-size: 28px; /* 2xl */
+}
+
+h2 {
+  font-size: 22px; /* xl */
+}
+
+h3 {
+  font-size: 18px; /* lg */
+}
+
+p,
+ul,
+dl {
+  margin: 0;
+  /* DESIGN.md §4: measure capped at 70ch for prose. */
+  max-width: 70ch;
+}
+
+ul {
+  padding-inline-start: 24px;
+}
+
+li + li {
+  margin-block-start: 8px;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+  font-size: 14px; /* sm; xs is reserved for mono metadata only */
+  font-variant-numeric: tabular-nums;
+  /* A path or an identifier must wrap, not scroll the page (DESIGN.md §9:
+     prefer wrapping to truncation). */
+  overflow-wrap: anywhere;
+}
+
+code {
+  background: var(--subtle);
+  border-radius: var(--radius-chip);
+  padding: 1px 4px;
+}
+
+a {
+  color: var(--accent-ink);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* DESIGN.md §6: hover is gated, transitions are opacity and colour only,
+   never `transition: all`. */
+@media (hover: hover) and (pointer: fine) {
+  a {
+    transition: color 120ms var(--ease-out);
+  }
+
+  a:hover {
+    color: var(--fg);
+  }
+}
+
+/* DESIGN.md §6: reduced motion means gentler, not none. Colour and opacity
+   stay; every transform and every stagger goes. There are no transforms in
+   this sheet, so this block is the standing rule rather than a repair. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-property: color, background-color, border-color, opacity !important;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Layout and the few parts this shell needs
+ * ------------------------------------------------------------------ */
+
+.skip-link {
+  position: absolute;
+  left: 16px;
+  /* Off-screen but focusable and in the accessibility tree, so it is reachable
+     by the first Tab press rather than hidden with `display: none`. */
+  top: -64px;
+  z-index: 10;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* DESIGN.md §9: minimum target 44x44px. */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 16px;
+  text-decoration: none;
+}
+
+.skip-link:focus-visible {
+  top: 16px;
+}
+
+.page {
+  /* 16px side gutter at every width, so 320px has no horizontal scroll. */
+  padding: 32px 16px 48px;
+  max-width: 76ch;
+  margin: 0 auto;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px; /* xs, mono metadata only */
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-block-end: 8px;
+}
+
+.lede {
+  color: var(--fg-muted);
+  font-size: 18px; /* lg */
+  margin-block-start: 12px;
+}
+
+section {
+  margin-block-start: 32px;
+}
+
+section > * + * {
+  margin-block-start: 12px;
+}
+
+/* DESIGN.md §5: grouping with space and a single hairline first. One raised
+   surface, a 1px `--divider` hairline, no shadow on cards, never nested. */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.status-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.status-list > li {
+  display: grid;
+  /* Stacks at narrow widths rather than forcing a two-column minimum. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  padding-block: 12px;
+}
+
+.status-list > li + li {
+  border-block-start: 1px solid var(--divider);
+  margin-block-start: 0;
+}
+
+@media (min-width: 34rem) {
+  .status-list > li {
+    grid-template-columns: 12ch minmax(0, 1fr);
+    gap: 16px;
+    align-items: baseline;
+  }
+}
+
+/* DESIGN.md §7: the status word carries the meaning. A mono uppercase label
+   spelled out, never a colour code and never a status dot. Colour may not
+   carry evaluative meaning (DESIGN.md §1), so these are neutral by design. */
+.status-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+footer {
+  margin-block-start: 48px;
+  padding-block-start: 16px;
+  border-block-start: 1px solid var(--divider);
+  color: var(--fg-muted);
+  font-size: 14px; /* sm */
+}

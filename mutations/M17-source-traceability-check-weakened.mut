@@ -1,0 +1,39 @@
+# M17 — `source_factual_is_traceable` weakened so every source passes it.
+#
+# WHAT THE GUARD PROTECTS. FR-02 and PRD §8.1 ("source list and access dates"): anything
+# that is not an openly declared invented assumption must be reachable and must carry the
+# date it was read. Without it, a source row can assert `kind = 'news_report'` with no uri
+# and no retrieved_date — an unverifiable citation that renders exactly like a verifiable
+# one. It is also the only part of NFR-10 source integrity that exists in the schema
+# today (`source.status` and the archival flag of canon §12.1 item 4 are not built yet),
+# so it is carrying that requirement alone.
+#
+# WHY THIS MUTATION IS WORTH REGISTERING, and the gap it closes. Every one of the ten
+# sources in the seeded case is `kind = 'fictional_assumption'`, which is the branch the
+# constraint does NOT constrain. So on the seeded data the check is satisfied VACUOUSLY:
+# it has never rejected anything, no CTRL block in 0008 and no SEED check in 0009 reads
+# it, and before this entry nothing in the repository would have noticed its removal. The
+# two probes in the named test are the only place it is made to bite, and this mutation is
+# what proves they do.
+#
+# The replacement is deliberately plausible rather than obviously wrong — `or kind is not
+# null` is the shape a careless simplification takes, it keeps the constraint name, it
+# keeps a non-trivial-looking predicate, and `kind` is NOT NULL so it admits every row.
+#
+# WHAT A CAUGHT VERDICT ESTABLISHES. That a vacuously-satisfied constraint is nonetheless
+# under test, by probes that reach the branch the seeded data never exercises.
+id: M17
+title: source_factual_is_traceable rewritten so a non-fictional source needs no uri and no retrieved date
+expect: caught
+proves: FR-02 / PRD 8.1 source traceability is tested on the branch the seeded case never exercises
+expect-test: a non-fictional source without a uri or a retrieved date is rejected, and every seeded source is a dated fictional assumption
+
+file: migrations/0008_scenario_content.sql
+count: 1
+@@FIND
+  constraint source_factual_is_traceable check (
+    kind = 'fictional_assumption' or (uri is not null and retrieved_date is not null))
+@@REPLACE
+  constraint source_factual_is_traceable check (
+    kind = 'fictional_assumption' or kind is not null)
+@@END

@@ -1,0 +1,33 @@
+# M15 — `scenario_version.is_fiction` becomes nullable.
+#
+# WHAT THE GUARD PROTECTS. FR-02 and canon §1.2's editorial boundary. Guyana-first is
+# editorial context, not licence to invent statutes, budgets, prices or health data, and
+# the one relational fact that keeps an invented case from reading as a real one is that
+# every version carries an explicit fiction flag. A NULLABLE flag is worse than a missing
+# one: the row inserts, the case renders, and it reads as neither fictional nor factual.
+#
+# WHY THE MIGRATION STILL PASSES WITH THIS APPLIED, which is what makes it a real gap
+# rather than a typo the build would catch:
+#   * 0009's SEED-5e asserts `is_fiction` is TRUE and agrees with the body's fiction
+#     notice. The seed sets it explicitly, so dropping NOT NULL changes nothing it reads.
+#   * No CTRL block in 0008 and no posture rule reads `pg_attribute.attnotnull` for this
+#     column. Posture rule 10 covers `user_id` columns only, and reference data has none.
+# So the column constraint is load-bearing and, before this registry entry, unobserved.
+#
+# WHAT A CAUGHT VERDICT ESTABLISHES. That the catalog leg AND the insert probe in the
+# named test both bite: the test asserts `attnotnull` directly and also attempts an
+# insert omitting the column, so the mutation is caught twice over by one test and a
+# later edit cannot quietly reshape one leg into unreachability.
+id: M15
+title: scenario_version.is_fiction loses its NOT NULL, so an unlabelled case can be inserted
+expect: caught
+proves: FR-02's fiction flag is enforced by a constraint that a test can see disappear
+expect-test: is_fiction and as_of_date are NOT NULL, and both agree with the case body fiction notice
+
+file: migrations/0008_scenario_content.sql
+count: 1
+@@FIND
+  is_fiction        boolean not null,
+@@REPLACE
+  is_fiction        boolean,
+@@END

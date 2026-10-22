@@ -48,3 +48,4 @@ with one line each on what will fill them (canon §12).
   a document that names a different number for a decision recorded here is the document to
   change.
 | [ADR-0014](ADR-0014-lifecycle-write-path-via-definer-functions.md) | Lifecycle transitions run through SECURITY DEFINER functions | Accepted | The app role cannot write milestone timestamps, so every transition runs through an owner-owned definer function with derived identity, a row lock, idempotency and a row-count assertion. |
+| [ADR-0015](ADR-0015-static-github-pages-plus-supabase.md) | Static export on GitHub Pages with Supabase as the backend | Accepted, not yet implemented | Reconciles docs/supabase-target.md with the canon: names which sections the port supersedes, and records that RLS becomes the only wall. |
