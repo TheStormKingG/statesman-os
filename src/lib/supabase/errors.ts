@@ -468,3 +468,110 @@ export function publicMessageFor(value: unknown): string {
   const mapped = mapDatabaseError(value)
   return mapped instanceof StatesmanError ? mapped.publicMessage : 'The request could not be completed.'
 }
+
+/* ------------------------------------------------------------------ *
+ * The Supabase / PostgREST layer
+ * ------------------------------------------------------------------ */
+
+/**
+ * A PostgREST error as it arrives in the browser. Read structurally, for the same reason
+ * the pg path is: an `instanceof` check does not survive two copies of a library in one
+ * process, and this module stays dependency-free.
+ */
+interface PostgrestShape {
+  readonly code: string
+  readonly message: string
+  readonly details?: string | null
+  readonly hint?: string | null
+}
+
+function asPostgrestError(value: unknown): PostgrestShape | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const v = value as Record<string, unknown>
+  if (typeof v['code'] !== 'string' || typeof v['message'] !== 'string') return undefined
+  return {
+    code: v['code'],
+    message: v['message'],
+    details: typeof v['details'] === 'string' ? v['details'] : null,
+    hint: typeof v['hint'] === 'string' ? v['hint'] : null,
+  }
+}
+
+/**
+ * PostgREST does not expose `constraint` as its own field the way `pg` does, so the
+ * constraint name has to be recovered from the message or details. This matters for one
+ * specific reason and it is not cosmetic: `dr_token_uq` means a REPLAY (return the
+ * existing revision) and `dr_no_uq` means a revision-number CONFLICT (recompute and
+ * retry). Both arrive as SQLSTATE 23505. Flattening them to one "conflict" would make a
+ * safe replay look like a failure and a genuine conflict look retryable in the wrong way.
+ */
+function constraintFrom(e: PostgrestShape): string | undefined {
+  const haystack = `${e.message} ${e.details ?? ''}`
+  for (const name of Object.values(CONSTRAINT)) {
+    if (haystack.includes(name)) return name
+  }
+  return undefined
+}
+
+/** Map a PostgREST error to the same domain taxonomy the pg path produces. */
+export function mapPostgrestError(value: unknown): unknown {
+  if (value instanceof StatesmanError) return value
+  const e = asPostgrestError(value)
+  if (e === undefined) return value
+  const detail: Detail = {
+    sqlState: e.code,
+    constraintName: constraintFrom(e),
+    cause: value,
+  }
+  const factory = BY_SQLSTATE[e.code]
+  const message = `[${e.code}] ${e.message}`
+  return factory === undefined ? new UnknownDatabaseError(message, detail) : factory(message, detail)
+}
+
+/* ------------------------------------------------------------------ *
+ * Zero rows is NOT absence
+ * ------------------------------------------------------------------ */
+
+/**
+ * THE MOST IMPORTANT TYPE IN THIS FILE, and the one the architecture change forced.
+ *
+ * On the server path a missing identity RAISED SQLSTATE 28000, because
+ * `app.require_user_id()` raised. On Supabase, `auth.uid()` returns NULL instead
+ * (measured, with a paired control: as `authenticated` with no claim the read returns 0
+ * rows and NO error; with the claim it returns the row). So RLS denial now arrives as an
+ * EMPTY RESULT, indistinguishable at the wire from "the row genuinely does not exist".
+ *
+ * Collapsing those two into `null` is how a denial becomes a 404 and a security event
+ * becomes a shrug. Worse, Slice 2 established that an EMPTY forced-RLS table does not
+ * deny at all — the policy qual is never evaluated — so "0 rows" can additionally mean
+ * "the table is empty and nothing was ever checked".
+ *
+ * Callers are therefore forced to name which of the three they are looking at. There is
+ * deliberately no helper that turns this back into `T | null`.
+ */
+export type RowOutcome<T> =
+  | { readonly kind: 'row'; readonly row: T }
+  | { readonly kind: 'empty'; readonly reason: 'denied-or-absent'; readonly note: string }
+
+/**
+ * Wrap a single-row read. `empty` is returned rather than `null`, and its note states
+ * plainly that the caller cannot tell denial from absence from this result alone.
+ */
+export function singleRowOutcome<T>(rows: readonly T[]): RowOutcome<T> {
+  const first = rows[0]
+  if (rows.length === 1 && first !== undefined) return { kind: 'row', row: first }
+  if (rows.length === 0) {
+    return {
+      kind: 'empty',
+      reason: 'denied-or-absent',
+      note:
+        'Zero rows. Under RLS with auth.uid() returning NULL this is indistinguishable ' +
+        'from the row not existing, from the caller not owning it, and from the table ' +
+        'being empty. Do not render this as "not found" without separate evidence.',
+    }
+  }
+  throw new RowCountError(`expected at most 1 row, got ${String(rows.length)}`, {
+    sqlState: undefined,
+    cause: undefined,
+  })
+}

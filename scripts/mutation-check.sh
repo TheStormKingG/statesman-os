@@ -298,9 +298,19 @@ make_mirror() { # <dest>
   mkdir -p "$dest"
   ln -s "$REPO/node_modules" "$dest/node_modules"
   cp "$REPO/package.json" "$dest/package.json"
-  for d in src tests scripts migrations; do
+  for d in src tests scripts; do
     cp -R "$REPO/$d" "$dest/$d"
   done
+  # The migration set moved to supabase/migrations during the port (ADR-0015). Copy ONLY
+  # that subtree: supabase/.temp holds the pooler URL, and a mirror has no business
+  # carrying a credential. The old top-level migrations/ directory has since been DELETED
+  # (it is in git history at commit b3a5f59, and scripts/db-bootstrap.sh, which applied
+  # its 0000, is retired), so there is no second set left to copy by accident. When this
+  # mirror was still missing supabase/migrations entirely, migrate.sh's refusal to report
+  # success over a zero-migration glob is what caught it — rather than a green run over an
+  # empty schema, which every posture rule passes trivially (V7).
+  mkdir -p "$dest/supabase"
+  cp -R "$REPO/supabase/migrations" "$dest/supabase/migrations"
   for f in vitest.integration.config.ts vitest.unit.config.ts tsconfig.json; do
     if [ -f "$REPO/$f" ]; then cp "$REPO/$f" "$dest/$f"; fi
   done

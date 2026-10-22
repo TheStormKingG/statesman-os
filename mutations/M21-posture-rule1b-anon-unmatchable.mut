@@ -1,0 +1,46 @@
+# M21 — posture rule 1b (`anon` HOLDS NOTHING) made unmatchable.
+#
+# WHY THIS IS THE NORMAL FAILURE HERE, NOT AN EXOTIC ONE. A stock Supabase project ships
+# `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon,
+# authenticated, service_role`. The consequence is that a table is, the instant it exists,
+# fully readable and writable by the role the published GitHub Page resolves to with the
+# publishable anon key. That is V2/V30 in different clothes, with one difference: these are
+# real rows in pg_default_acl rather than the built-in PUBLIC default, so
+# `ALTER DEFAULT PRIVILEGES ... REVOKE` does delete them.
+#
+# There is no anonymous read path in this product: every table is either a user's private
+# journal (FR-14) or content for a signed-in user. Forced RLS would not save a mistake
+# here either — an `anon` request with no claim is exactly the case where `auth.uid()` is
+# NULL and the policy denies SILENTLY, which is survivable for SELECT but is not something
+# to leave to a predicate for INSERT or DELETE on an identity table.
+#
+# Three controls stand behind this (port notes P4): the default ACL rows are deleted in
+# 20261021140000; every table-creating migration ends with an explicit
+# `revoke all ... from anon, authenticated, service_role` followed by its narrow grants;
+# and this rule aborts the build if `anon` holds anything at all. This mutation proves the
+# third is load-bearing rather than decorative — it is the only one of the three that
+# cannot be undone by something outside this repository.
+#
+# EXPECTATION UNVERIFIED: the gate could not run in the session that registered this.
+# Probe E1 in docs/supabase-port-notes.md §6 records this rule firing by execution when
+# `anon` is granted SELECT.
+#
+# NOTE ON WHAT IS STILL UNMEASURED: docs/supabase-target.md §1 measured roles, auth.uid(),
+# ownership and V2/V30 on the live project. It did NOT read pg_default_acl. The emulation
+# reproduces the MORE dangerous shape deliberately, so if the live project turns out not to
+# carry those defaults our controls are merely redundant — the safe direction to be wrong
+# in. Confirm with a pg_default_acl read before the first push.
+id: M21
+title: posture rule 1b (`anon` holds nothing on any public table) made unmatchable
+expect: uncaught
+todo: promote to `expect: caught` once the baseline is green. Probe E1 passed by execution; the named catcher does not yet exist as a test and must be written. Also settle finding P4 by reading pg_default_acl on the live project.
+proves: rule 1b catches the stock Supabase default ACL that grants anon ALL on new tables (port notes P4)
+expect-test: [M21] raises ST099 for anon granted SELECT on a public table
+
+file: supabase/migrations/20261021140500_verify_security_posture.sql
+count: 1
+@@FIND
+      and has_table_privilege('anon', c.oid, p.priv)
+@@REPLACE
+      and has_table_privilege('__never_a_role__', c.oid, p.priv)
+@@END

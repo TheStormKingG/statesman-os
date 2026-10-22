@@ -26,7 +26,7 @@ expect: caught
 proves: the ST020 publish gate on scenario_version has a control outside the migration that creates it
 expect-test: a published scenario_version refuses UPDATE and DELETE with ST020 while an unpublished one accepts both
 
-file: migrations/0008_scenario_content.sql
+file: supabase/migrations/20261021140700_scenario_content.sql
 count: 1
 @@FIND
 create trigger scenario_version_published_immutable

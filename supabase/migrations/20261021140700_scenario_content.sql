@@ -1,82 +1,127 @@
--- 0008 Scenario content: the reference tables of canon §5.
+-- 20261021140700 Scenario content: the reference tables of canon §5.
+-- Ported from migrations/0008_scenario_content.sql.
+--
+-- ===========================================================================
+-- PORT NOTE — THE PROPERTY THIS FILE WAS BUILT AROUND NO LONGER EXISTS
+-- ===========================================================================
+-- migrations/0008 chose its policy shape to BUY a specific property, argued for at length
+-- below and asserted by CTRL-3: `using (app.require_user_id() is not null)` made an
+-- UNAUTHENTICATED read of a reference table RAISE 28000 rather than return rows.
+--
+-- ADR-0015 removes it. `auth.uid()` returns NULL where `app.require_user_id()` raised, so
+-- `using (auth.uid() is not null)` denies by evaluating to false. A claimless read now
+-- returns zero rows and raises nothing, on a populated table as well as an empty one.
+--
+-- Everything below that reasons from the 28000 has been rewritten rather than
+-- mechanically substituted, because a comment that still promised it would be a false
+-- claim about a security control. What survives, and is now the ONLY evidence available:
+--
+--   * The SENTINEL. 0008 discovered by failing CTRL-3 that an empty forced table does not
+--     deny at all, and seeded one reserved row per table so the qual would be reachable.
+--     That discovery was the beginning of V18's second life; the port makes it the whole
+--     story, because the row count is now the only observable and a zero is meaningless
+--     without a row that would otherwise have come back.
+--   * The PAIRED CONTROL, rewritten below to measure row counts as `authenticated`
+--     instead of catching a SQLSTATE as the owner.
+--   * The sentinel is no longer merely seeded and argued for: posture rule 9b REQUIRES a
+--     `public.posture_sentinel_row` registration for every protected table with no
+--     `user_id` column, and all five are registered at the end of this file. Under the old
+--     rule 9 these five were waived by a `posture_exempt_table` row and carried no
+--     enforced sentinel at all.
 --
 -- These five tables are REFERENCE data: readable by every authenticated user, written
--- only by migration/seed as statesman_owner. Canon §11 CUT the `app_editor` role, the
+-- only by migration/seed as postgres. Canon §11 CUT the `app_editor` role, the
 -- `scenario_version_draft` table and the `publish_scenario_version()` function, so there
--- is deliberately NO authoring path here. statesman_app gets SELECT and nothing else.
+-- is deliberately NO authoring path here. authenticated gets SELECT and nothing else.
 --
 -- ===========================================================================
 -- POSTURE DECISION (brief rule 1, canon §4.8) — STATED, not implied
 -- ===========================================================================
 -- Reference data readable by every authenticated user is NOT the tenancy shape, so the
--- `user_id = app.require_user_id()` policy of 0003 does not apply. The choice taken here
+-- `user_id = auth.uid()` policy of 0003 does not apply. The choice taken here
 -- is BOTH halves of the brief's menu, because the posture checker's ten rules are not
 -- interchangeable and only one combination satisfies all of them without weakening any:
 --
 --   * A POLICY, not an exemption, is what satisfies rule 1 (REACHABILITY). Rule 1 has no
---     exemption clause: any public table on which statesman_app holds SELECT must be
+--     exemption clause: any public table on which authenticated holds SELECT must be
 --     RLS-enabled AND FORCED with >= 1 policy. Requirement 3 grants SELECT, so forced RLS
 --     plus a policy is MANDATORY for all five tables. An exemption row cannot buy its way
 --     out of rule 1 and was never able to.
 --
---   * The policy is `using (app.require_user_id() is not null)` — read permitted to any
---     authenticated identity, scoped by the raising accessor. It is not `using (true)`,
---     so rule 8 (POLICY SHAPE) passes on both of its tests: the qual is not the literal
---     `true`, and it mentions require_user_id(). The property this buys is the one the
---     brief names as worth keeping: an UNAUTHENTICATED read raises 28000 with no context
---     rather than returning rows. Asserted below by a paired control (CTRL-3/CTRL-4), not
---     assumed.
+--   * The policy is `using (auth.uid() is not null)` — read permitted to any
+--     authenticated identity, scoped by the platform's identity accessor. It is not
+--     `using (true)`, so rule 8 (POLICY SHAPE) passes on both of its tests: the qual is
+--     not the literal `true`, and it mentions `auth.uid()`.
 --
---   * An EXEMPTION ROW is additionally required, and ONLY for rule 9 (SENTINELS). Rule 9
---     enumerates every forced-RLS public table that is not exempt and requires exactly
---     one row owned by the reserved sentinel uuid, keyed on a `user_id` column. These
---     tables have no `user_id` column and never will — reference rows have no owner. An
---     unexempted reference table therefore trips rule 9's explicit
---     "protected table has no user_id column, so rule 9 cannot be evaluated" branch, and
---     every migration run in every environment would abort with ST099.
+--     WHAT IT BUYS, post-port: a read with NO claim returns ZERO ROWS. It does not raise,
+--     and the 28000 that migrations/0008 was written to secure is gone (see the PORT NOTE
+--     above). So the control is a row count, and a row count of 0 is never a success
+--     signal on its own (V7) — which is exactly why the sentinel seed and the paired
+--     control below are load-bearing rather than thorough.
 --
---     V18's reason for sentinels still has to be answered, not waived — and the first
---     draft of this migration answered it WRONGLY, which a control caught. See the next
---     block.
+--   * A POSTURE_SENTINEL_ROW REGISTRATION, one per table, which is where the port
+--     CHANGED this migration's posture rather than translating it.
+--
+--     migrations/0008 put these five tables in `posture_exempt_table` to waive rule 9,
+--     whose sentinel mechanism is keyed on a `user_id` column that reference rows do not
+--     and will never have. The waiver was reasoned and the sentinels were seeded anyway —
+--     but NOTHING ENFORCED THEM. Five protected tables carried no checked sentinel, and
+--     the argument that they did lived only in this comment.
+--
+--     Posture rule 9 is now split. 9a is the user_id-keyed form, unchanged. 9b covers a
+--     protected table with no `user_id` column and does not skip it: the table must name
+--     the column and value that identify its sentinel in
+--     `public.posture_sentinel_row`, and that row is counted on every migration run in
+--     every environment. There is no longer any way for a protected table to carry no
+--     sentinel requirement. The five registrations are at the end of this file, beside
+--     the sentinels they describe.
+--
+--     The `posture_exempt_table` rows are KEPT, and they now waive rule 2 (ENUMERATION)
+--     only — see the paragraph below on what that does and does not cost.
 --
 -- ===========================================================================
 -- MEASURED HERE, AND IT CHANGED THE DESIGN: an empty forced-RLS table does not deny
 -- ===========================================================================
+-- This finding PREDATES the port and is the reason the port's silent-denial semantics did
+-- not come as a surprise here. Recorded as it happened, then brought up to date.
+--
 -- The first draft of this file enabled RLS, forced it, created the read policies, and
--- shipped the five tables EMPTY, on the reasoning that the brief's property — "an
+-- shipped the five tables EMPTY, on the reasoning that the then-current property — "an
 -- unauthenticated read raises 28000 with no context" — followed from the policy. CTRL-3
--- below was written to assert exactly that, and it FAILED, on all five tables at once:
+-- was written to assert exactly that, and it FAILED, on all five tables at once:
 --
 --     CTRL-3 scenario returned instead of raising 28000 with no identity context
 --     ... the same for scenario_version, source, scenario_claim, rubric_version
 --
--- On an EMPTY table the qual is never evaluated: the scan finds no candidate row, so
--- app.require_user_id() is never called, and the read returns zero rows and raises
--- NOTHING. That is V6 ("the policy raises only when a candidate row actually reaches the
--- qual") applying to a case the project had not met before, and it is the measured
--- DEPARTURE from 0005's note that `select count(*) from public.decision` raises 28000 for
--- an uncontexted owner — public.decision is not empty, because 0006 seeds it a sentinel.
--- The raising behaviour was never a property of the policy alone. It was a property of
--- the policy AND a row being there.
+-- On an EMPTY table the qual is never evaluated: the scan finds no candidate row, so the
+-- accessor is never called, and the read returns zero rows and raises NOTHING. That is V6
+-- ("the policy raises only when a candidate row actually reaches the qual") applying to a
+-- case the project had not met before. The raising behaviour was never a property of the
+-- policy alone. It was a property of the policy AND a row being there.
 --
--- So an empty reference table is indistinguishable, to an unauthenticated caller, from a
--- reference table with no policy at all: both return zero rows in silence. That is V18
--- verbatim, and it is why reference data needs a reserved row just as much as user data
--- does — for a different reason, with a different shape.
+-- AFTER THE PORT IT IS NOT A PROPERTY OF ANYTHING. `auth.uid()` does not raise, so a
+-- claimless read of a POPULATED reference table also returns zero rows in silence. The
+-- 28000 is not merely unreachable on an empty table; it does not exist. Which means:
+--
+--   * an empty reference table and a reference table with no policy at all are still
+--     indistinguishable — V18 verbatim — and
+--   * the only thing that distinguishes "denied" from "absent" is a row that WOULD be
+--     returned to a permitted reader and is NOT returned to a claimless one.
 --
 -- Hence the SENTINEL SEED below: one reserved row in each of the five tables, inserted by
--- this migration, so the qual is reachable and the denial is real from the moment the
--- schema exists rather than from whenever content is first seeded. The exemption from
--- rule 9 is only about rule 9's user_id-keyed MECHANISM; the evidence requirement behind
--- it is met, not waived, by that row plus CTRL-3/CTRL-4.
+-- this migration, so the qual is reachable and the denial is observable from the moment
+-- the schema exists rather than from whenever content is first seeded. And hence the
+-- rule-9b registrations: the evidence requirement behind rule 9 is MET AND ENFORCED by
+-- that row plus the paired control, where migrations/0008 met it and argued for it but
+-- left nothing checking it.
 --
---   * Nothing is weakened. The exemption also makes rule 2 (ENUMERATION) skip these five
---     tables, but rule 2 is subsumed here: rule 1 already demands forced RLS plus a
---     policy because of the SELECT grant, and rule 1 is not exemption-aware. The one
---     check the exemption genuinely waives is rule 9. CTRL-1 below re-asserts the
---     catalog facts (enabled + forced + >= 1 policy on all five) from inside this
---     migration, so a later edit that drops the policy or the FORCE fails here as well as
---     at rule 1.
+--   * Nothing is weakened, and the one thing that WAS weakened is now closed. The
+--     exemption makes rule 2 (ENUMERATION) skip these five tables, but rule 2 is
+--     subsumed here: rule 1 already demands forced RLS plus a policy because of the
+--     SELECT grant, and rule 1 is not exemption-aware. Rule 9 used to be waived outright
+--     and is now satisfied through 9b instead. CTRL-1 below re-asserts the catalog facts
+--     (enabled + forced + >= 1 policy on all five) from inside this migration, so a later
+--     edit that drops the policy or the FORCE fails here as well as at rule 1.
 --
 -- ===========================================================================
 -- NEW SQLSTATES (brief rule 2 — UPPERCASE, V13)
@@ -87,10 +132,15 @@
 --          row-level BEFORE UPDATE/DELETE triggers entirely).
 --
 -- Both are new and unused elsewhere. In use before this file: ST001, ST002, ST003, ST005,
--- ST010, ST011, ST012, ST099. src/server/db/errors.ts does not yet map ST020/ST021 and
--- is not this migration's file; an unmapped custom code currently falls through to the
--- generic branch of fromDatabaseError(). Mapping them is an owed follow-up, recorded in
--- this slice's report rather than silently assumed.
+-- ST010, ST011, ST012, ST099.
+--
+-- PORT NOTE: migrations/0008 recorded an owed follow-up to map ST020/ST021 in
+-- `src/server/db/errors.ts`. ADR-0015 retires `src/server/db/**` entirely — there is no
+-- server pool to map an error inside. The obligation does not disappear, it MOVES: a
+-- custom SQLSTATE now arrives at the browser through PostgREST, in a JSON error body,
+-- and the client-side mapping is owed in the slice that builds the screens. Recorded in
+-- docs/supabase-port-notes.md rather than silently dropped with the file that used to
+-- carry it.
 --
 -- ===========================================================================
 -- content_hash — ONE property, measured, and what it is NOT
@@ -120,7 +170,7 @@
 --     (fcbbaada9c08608ad78d2f17721c68c314dc169d97bd2b44d1aaa1bb6a07ca60 for both). An
 --     outside serialisation is therefore not reproducible, and a trigger comparing an
 --     app-supplied hash to the Postgres rendering would reject correct content.
---   * NOT tamper evidence against statesman_owner. An owner who rewrites `content` gets
+--   * NOT tamper evidence against postgres. An owner who rewrites `content` gets
 --     a matching hash for free. The anti-tamper controls are the ST020 publish gate, the
 --     ST021 truncate gate and the absent grants — not the hash.
 --
@@ -139,10 +189,18 @@
 -- ===========================================================================
 -- SEEDING THIS SCHEMA LATER — READ THIS FIRST (V8)
 -- ===========================================================================
--- FORCE ROW LEVEL SECURITY subjects statesman_owner to the policy too, and the policies
+-- FORCE ROW LEVEL SECURITY subjects a table's OWNER to the policy too, and the policies
 -- below are `for select` only. A seed migration that INSERTs here without bracketing will
 -- NOT silently write zero rows — it will fail, because an INSERT with no applicable
--- policy is refused outright. Either way the rule is 0006's:
+-- policy is refused outright.
+--
+-- PORT NOTE: on Supabase these migrations run as `postgres`, which is BYPASSRLS, so the
+-- bracket is not what makes the inserts work any more — the migrator's role attribute is.
+-- The bracket is KEPT regardless, here and in every seed, for the reason given in
+-- 20261021140600_sentinels.sql: a file whose correctness depends on the migrating role
+-- having `rolbypassrls` is a file that breaks silently the first time it is applied by
+-- any other path, and depending on that attribute is the single most dangerous habit the
+-- port can teach. Either way the rule is 0006's:
 --
 --     alter table public.scenario_version no force row level security;   -- bracket OFF
 --     ...  insert, then COUNT while the bracket is still off ...
@@ -158,23 +216,29 @@
 -- §5.1 does not give them one) and so carry the TRUNCATE gate and absent grants but no
 -- row-level publish gate. The content a decision_revision pins is
 -- `scenario_version.content`, and that IS frozen, so FR-04 is met. The residual is that
--- statesman_owner can still edit a `source` or `scenario_claim` row attached to an
+-- postgres can still edit a `source` or `scenario_claim` row attached to an
 -- already-published version.
 --
 -- It is declared rather than closed because the obvious closure is worse than the hole:
 -- a trigger on those two tables would have to read the parent `scenario_version` to learn
--- whether it is published, and under FORCE RLS that read raises 28000 in exactly the
--- uncontexted owner-run migration that is its only caller. The two escapes — assuming
--- the sentinel identity inside the trigger, or special-casing the owner in the policy —
--- each add a standing bypass to buy a guard against the one role that can already remove
--- any guard. Closing mechanism for the seed slice instead: record each published
+-- whether it is published.
+--
+-- PORT NOTE: the original objection was that under FORCE RLS such a read RAISES 28000 in
+-- the uncontexted owner-run migration that is its only caller. Post-port that specific
+-- failure is gone — a claimless read returns zero rows instead — and the objection is
+-- therefore WORSE, not better. The trigger would now read the parent, find nothing,
+-- conclude "not published", and permit the edit. SILENTLY. A guard whose lookup is
+-- subject to the same silent denial it is trying to police will fail open rather than
+-- loudly, which is the one failure direction this project does not accept. The two
+-- escapes — assuming the sentinel identity inside the trigger, or special-casing the
+-- owner in the policy — each add a standing bypass to buy a guard against the one role
+-- that can already remove any guard. Closing mechanism for the seed slice instead: record each published
 -- version's `(source, scenario_claim)` digest alongside the migration that publishes it
 -- and assert it in CI, which costs nothing at runtime and detects the edit afterwards.
 -- `on delete restrict` below already prevents the destructive half.
 --
 -- ===========================================================================
-\set ON_ERROR_STOP on
-set role statesman_owner;
+set role postgres;
 
 -- ---------------------------------------------------------------------------
 -- rubric_version. Created first: scenario_version references it.
@@ -348,15 +412,15 @@ alter table public.rubric_version   enable row level security;
 alter table public.rubric_version   force  row level security;
 
 create policy scenario_read on public.scenario
-  for select using (app.require_user_id() is not null);
+  for select using (auth.uid() is not null);
 create policy scenario_version_read on public.scenario_version
-  for select using (app.require_user_id() is not null);
+  for select using (auth.uid() is not null);
 create policy source_read on public.source
-  for select using (app.require_user_id() is not null);
+  for select using (auth.uid() is not null);
 create policy scenario_claim_read on public.scenario_claim
-  for select using (app.require_user_id() is not null);
+  for select using (auth.uid() is not null);
 create policy rubric_version_read on public.rubric_version
-  for select using (app.require_user_id() is not null);
+  for select using (auth.uid() is not null);
 
 -- ---------------------------------------------------------------------------
 -- Immutability (brief requirement 1, canon §4.4, FR-04).
@@ -373,7 +437,7 @@ create policy rubric_version_read on public.rubric_version
 -- therefore fire on all of them or none. The gate asks only whether the row was already
 -- published, which is a fact about OLD alone.
 --
--- Role-independent: this fires for statesman_owner too (V32), so a migration that needs
+-- Role-independent: this fires for postgres too (V32), so a migration that needs
 -- to correct a published row has to disable the trigger explicitly and visibly.
 -- ---------------------------------------------------------------------------
 create function app.guard_published_reference() returns trigger
@@ -425,18 +489,31 @@ create trigger rubric_version_no_truncate   before truncate on public.rubric_ver
 -- Grants (brief requirement 3). SELECT only. No INSERT, UPDATE, DELETE or TRUNCATE on
 -- any of the five, for any role but the owner. Asserted by CTRL-2 below.
 -- ---------------------------------------------------------------------------
-grant select on public.scenario         to statesman_app;
-grant select on public.scenario_version to statesman_app;
-grant select on public.source           to statesman_app;
-grant select on public.scenario_claim   to statesman_app;
-grant select on public.rubric_version   to statesman_app;
+-- REVOKE FIRST. On a stock Supabase project `create table` in `public` grants ALL to
+-- anon, authenticated and service_role through the default ACL (20261021140000), so a
+-- migration that only ADDED its intended grants would leave `anon` with DELETE on the
+-- grounding whitelist and `authenticated` with UPDATE on published reference content —
+-- and CTRL-2 below, which checks only that authenticated lacks the three write
+-- privileges, would FAIL loudly rather than let it through. That is the control working;
+-- the revoke is what makes the state never exist.
+revoke all on table public.scenario         from anon, authenticated, service_role;
+revoke all on table public.scenario_version from anon, authenticated, service_role;
+revoke all on table public.source           from anon, authenticated, service_role;
+revoke all on table public.scenario_claim   from anon, authenticated, service_role;
+revoke all on table public.rubric_version   from anon, authenticated, service_role;
+
+grant select on public.scenario         to authenticated;
+grant select on public.scenario_version to authenticated;
+grant select on public.source           to authenticated;
+grant select on public.scenario_claim   to authenticated;
+grant select on public.rubric_version   to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- Posture exemptions — rule 9 only. See the POSTURE DECISION block in the header.
 -- ---------------------------------------------------------------------------
 insert into public.posture_exempt_table (table_name, reason) values
   ('scenario',
-   'reference data, no owner column: rule 9 sentinels are user_id-keyed and these rows have no user. Rule 1 still forces RLS + policy because statesman_app holds SELECT; evidence is CTRL-3/CTRL-4 (uncontexted read raises 28000, contexted read does not).'),
+   'reference data, no owner column: rule 2 waiver ONLY. Rule 1 still forces RLS + policy because authenticated holds SELECT, and rule 9 is now SATISFIED rather than waived, through the public.posture_sentinel_row registration at the end of this file (rule 9b). Evidence is CTRL-3/CTRL-4: as authenticated with no claim 0 rows and no error, with a claim >= 1 row.'),
   ('scenario_version',
    'reference data, no owner column: as scenario. Immutability is enforced by the ST020 publish gate, the ST021 truncate gate and absent grants, not by a tenancy policy.'),
   ('source',
@@ -445,6 +522,40 @@ insert into public.posture_exempt_table (table_name, reason) values
    'reference data, no owner column: as scenario. This table is the grounding whitelist; it is read by every authenticated user and written only by migration/seed.'),
   ('rubric_version',
    'reference data, no owner column: as scenario.')
+on conflict (table_name) do nothing;
+
+-- ---------------------------------------------------------------------------
+-- Rule 9b registrations — ADDED BY THE PORT, and the reason the exemptions above now
+-- waive rule 2 ALONE.
+-- ---------------------------------------------------------------------------
+-- migrations/0008 waived rule 9 for these five tables and seeded sentinels anyway,
+-- arguing in a comment that the evidence requirement was met. Nothing checked it. Five
+-- protected tables carried an unenforced sentinel, which is the same class of gap as an
+-- untested guard: it was true on the day it was written and nothing would notice when it
+-- stopped being true.
+--
+-- Posture rule 9b reads this registry for every forced-RLS public table with no `user_id`
+-- column, and requires EXACTLY ONE row matching (id_column, sentinel_id). Both the table
+-- name and the column name are checked against pg_attribute and interpolated with
+-- format('%I'); the value is a bind parameter compared as text, so no free-form SQL is
+-- stored or executed.
+--
+-- scenario_claim is keyed on `scenario_version_id` rather than on `claim_id`: claim ids
+-- are editor-assigned handles and unique only WITHIN a version, so a future case that
+-- also used the handle 'SENTINEL' would make the count 2 and fail this rule for a reason
+-- that is not a missing sentinel. The sentinel scenario_version has exactly one claim and
+-- always will, so the version id is the predicate that stays exact.
+insert into public.posture_sentinel_row (table_name, id_column, sentinel_id, reason) values
+  ('rubric_version',   'id', '00000000-0000-0000-0000-000000080001',
+   'reference data, no user_id column. An empty forced table does not deny (V18), and post-port a claimless read raises nothing at all, so this row is the only thing that makes CTRL-3''s zero mean denial.'),
+  ('scenario',         'id', '00000000-0000-0000-0000-000000080002',
+   'reference data, no user_id column. As rubric_version.'),
+  ('scenario_version', 'id', '00000000-0000-0000-0000-000000080003',
+   'reference data, no user_id column. As rubric_version. published_at IS NULL on this row, so it is never live content.'),
+  ('source',           'id', '00000000-0000-0000-0000-000000080004',
+   'reference data, no user_id column. As rubric_version. kind = fictional_assumption with no uri, so it cannot be mistaken for a citation.'),
+  ('scenario_claim',   'scenario_version_id', '00000000-0000-0000-0000-000000080003',
+   'reference data, no user_id column, and no single-column key: keyed on the sentinel scenario_version, which has exactly one claim. claim_id would be ambiguous because claim handles are unique only within a version.')
 on conflict (table_name) do nothing;
 
 -- ---------------------------------------------------------------------------
@@ -606,7 +717,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- CTRL-2 — requirement 3, measured rather than assumed. statesman_app holds SELECT and
+-- CTRL-2 — requirement 3, measured rather than assumed. authenticated holds SELECT and
 -- holds none of INSERT, UPDATE, DELETE, TRUNCATE on any of the five. A `grant select`
 -- that was written as `grant all` by a later edit fails here.
 -- ---------------------------------------------------------------------------
@@ -618,15 +729,15 @@ begin
      where ns.nspname = 'public'
        and c.relname in ('scenario','scenario_version','source','scenario_claim','rubric_version')
   loop
-    if not has_table_privilege('statesman_app', r.oid, 'SELECT') then
-      bad := bad || format(E'\n  statesman_app lacks SELECT on %s', r.relname);
+    if not has_table_privilege('authenticated', r.oid, 'SELECT') then
+      bad := bad || format(E'\n  authenticated lacks SELECT on %s', r.relname);
     end if;
-    if has_table_privilege('statesman_app', r.oid, 'INSERT')
-       or has_table_privilege('statesman_app', r.oid, 'UPDATE')
-       or has_table_privilege('statesman_app', r.oid, 'DELETE')
-       or has_table_privilege('statesman_app', r.oid, 'TRUNCATE') then
+    if has_table_privilege('authenticated', r.oid, 'INSERT')
+       or has_table_privilege('authenticated', r.oid, 'UPDATE')
+       or has_table_privilege('authenticated', r.oid, 'DELETE')
+       or has_table_privilege('authenticated', r.oid, 'TRUNCATE') then
       bad := bad || format(
-        E'\n  statesman_app holds a write privilege on reference table %s', r.relname);
+        E'\n  authenticated holds a write privilege on reference table %s', r.relname);
     end if;
   end loop;
   if bad <> '' then
@@ -635,73 +746,117 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- CTRL-3 / CTRL-4 — the paired control for the posture decision, and the evidence that
--- replaces rule 9's sentinel for these tables.
+-- CTRL-3 / CTRL-4 — the paired read control. REWRITTEN BY THE PORT, not translated.
 --
--- CTRL-3 (the denial): with NO identity context, a read of every one of the five raises
--- 28000. This is the property the brief names as worth keeping, and it is what proves
--- app.require_user_id() is actually in the qual. Note why a denial test ALONE would be
--- worthless here: `using (false)` would also deny, by returning zero rows and raising
--- nothing (V7) — and V18 records that zero rows is indistinguishable from an empty
--- table. So the 28000 is the signal, not the absence of rows.
+-- WHAT IT USED TO BE: CTRL-3 asserted that with no identity context a read of each of the
+-- five RAISED 28000, and the comment said in as many words "the 28000 is the signal, not
+-- the absence of rows", precisely because `using (false)` would also deny by returning
+-- zero rows and raising nothing (V7/V18).
 --
--- CTRL-4 (the positive control): with context set, the same read does NOT raise. Without
--- it, a policy of `using (app.require_user_id() is not null and false)` would pass CTRL-3
--- and ship five tables no authenticated user can read — a denial test passing for the
--- wrong reason, which is canon §8's whole subject.
+-- THAT SIGNAL NO LONGER EXISTS. `auth.uid()` returns NULL, so `auth.uid() is not null`
+-- denies by evaluating to false and the read returns zero rows in silence. The control
+-- cannot catch a SQLSTATE because there is none to catch, and the thing the old comment
+-- warned about — a denial indistinguishable from `using (false)` and from an empty table
+-- — is now the only observable there is.
 --
--- Runs as statesman_owner under FORCE, which subjects the owner to the policy too
--- (V8/V9) — so these reads go through the qual rather than around it by ownership. The
--- context is restored explicitly: set_config(..., true) is transaction-local, but V17
--- records it persisting in cases where it looked scoped, so the restore is written out.
+-- SO THE CONTROL IS REBUILT AROUND THE THREE THINGS STILL AVAILABLE:
+--
+--   CTRL-3 (the denial): as `authenticated` with NO claim, each of the five returns ZERO
+--     rows AND RAISES NOTHING. The "raises nothing" half is asserted explicitly, because
+--     an error here would mean something in the local emulation is reproducing the
+--     retired 28000 semantics and every denial measured against it would be worthless.
+--
+--   CTRL-4 (the positive control): as `authenticated` WITH a claim, each of the five
+--     returns AT LEAST ONE row — the sentinel seeded above. This is what makes CTRL-3's
+--     zero mean "denied" rather than "empty", "ungranted", or `using (false)`. It is the
+--     leg the old control could do without, because it had a SQLSTATE; it is now
+--     indispensable.
+--
+--   CTRL-4b (the discriminator): the claim used is a STRANGER's, not the sentinel row's
+--     owner — reference rows have no owner, so any claim must do. Both legs therefore
+--     differ in exactly one variable, the presence of a claim, which is what makes the
+--     pair a control rather than two observations.
+--
+-- RUNS AS `authenticated`, NOT as the migrating role. This is the other half of the
+-- rewrite and it is not optional: migrations/0008 ran these reads as `statesman_owner`,
+-- relying on FORCE to subject the owner to the policy (V8/V9). On Supabase the migrating
+-- role is `postgres`, which is BYPASSRLS — it is not subject to the policy under FORCE or
+-- otherwise, so the same block run as `postgres` would see every row on both legs and
+-- CTRL-3 would FAIL for a reason that has nothing to do with the policy. Worse, a careless
+-- author could "fix" that by deleting the assertion. ADR-0015: any probe connecting as
+-- `postgres` "passes while enforcing NOTHING".
+--
+-- `set role` is issued through EXECUTE because plpgsql does not accept it as a plain
+-- statement, and `reset role` is written out rather than left to the statement's implicit
+-- transaction, because the Supabase CLI wraps each migration file in one. The claim GUCs
+-- are restored explicitly too: set_config(..., true) is transaction-local, but V17 records
+-- it persisting where it looked scoped.
 -- ---------------------------------------------------------------------------
 do $$
 declare
-  sentinel  constant uuid := '00000000-0000-0000-0000-00000000dead';
+  stranger  constant uuid := 'aaaaaaaa-0000-0000-0000-00000000beef';
   tables    constant text[] := array[
     'scenario','scenario_version','source','scenario_claim','rubric_version'];
   t         text;
-  raised    boolean;
-  prev_ctx  text := current_setting('app.current_user_id', true);
+  n         bigint;
+  prev_sub    text := current_setting('request.jwt.claim.sub', true);
+  prev_claims text := current_setting('request.jwt.claims', true);
   bad       text := '';
 begin
-  -- CTRL-3: no context -> 28000 from every table.
-  perform set_config('app.current_user_id', '', true);
+  execute 'set role authenticated';
+
+  -- CTRL-3: no claim -> 0 rows from every table, and NO error.
+  perform set_config('request.jwt.claim.sub', '', true);
+  perform set_config('request.jwt.claims',    '', true);
   foreach t in array tables loop
-    raised := false;
     begin
-      execute format('select 1 from public.%I limit 1', t);
-    exception
-      when sqlstate '28000' then raised := true;
-      when others then
-        bad := bad || format(E'\n  CTRL-3 %s raised %s (%s), expected 28000',
-                             t, sqlerrm, sqlstate);
-        raised := true;
-    end;
-    if not raised then
+      execute format('select count(*) from public.%I', t) into n;
+      if n <> 0 then
+        bad := bad || format(
+          E'\n  CTRL-3 %s returned %s rows with NO identity claim, expected 0', t, n);
+      end if;
+    exception when others then
+      -- Not a pass. The live target returns zero rows and raises nothing; anything that
+      -- raises here means the emulation, or a policy, is reproducing the retired 28000
+      -- behaviour and every denial result in this suite would be measuring that instead.
       bad := bad || format(
-        E'\n  CTRL-3 %s returned instead of raising 28000 with no identity context', t);
-    end if;
+        E'\n  CTRL-3 %s RAISED %s (%s) with no claim, where the live target returns 0 '
+         'rows and raises nothing', t, sqlerrm, sqlstate);
+    end;
   end loop;
 
-  -- CTRL-4: context set -> the same read must NOT raise.
-  perform set_config('app.current_user_id', sentinel::text, true);
+  -- CTRL-4: THE POSITIVE CONTROL. A claim present -> at least one row, which is the
+  -- sentinel. Without this leg, CTRL-3's zero is satisfied by `using (false)`, by a
+  -- missing SELECT grant, and by an empty table — the three things V7 and V18 say a zero
+  -- cannot distinguish.
+  perform set_config('request.jwt.claim.sub', stranger::text, true);
   foreach t in array tables loop
     begin
-      execute format('select 1 from public.%I limit 1', t);
+      execute format('select count(*) from public.%I', t) into n;
+      if n < 1 then
+        bad := bad || format(
+          E'\n  CTRL-4 %s returned %s rows FOR AN AUTHENTICATED IDENTITY, expected >= 1 '
+           '(the sentinel). CTRL-3''s zero therefore proves nothing about the policy.',
+          t, n);
+      end if;
     exception when others then
       bad := bad || format(E'\n  CTRL-4 %s raised %s (%s) for an authenticated identity',
                            t, sqlerrm, sqlstate);
     end;
   end loop;
 
-  perform set_config('app.current_user_id', coalesce(prev_ctx, ''), true);
+  perform set_config('request.jwt.claim.sub', coalesce(prev_sub, ''), true);
+  perform set_config('request.jwt.claims',    coalesce(prev_claims, ''), true);
+  execute 'reset role';
 
   if bad <> '' then
-    raise exception 'reference-table read policy is not the shape 0008 claims:%', bad
+    raise exception 'reference-table read policy is not the shape this file claims:%', bad
       using errcode = 'ST099';
   end if;
 end $$;
+
+-- Unconditional, because a failure path inside the block above would leave the role set.
+set role postgres;
 
 -- ---------------------------------------------------------------------------
 -- CTRL-5 — the ST020 publish gate and the ST021 truncate gate, exercised. A gate that
@@ -729,10 +884,11 @@ end $$;
 --
 -- Bracketed NO FORCE / FORCE (V8/V9) across all five tables, not just the one being
 -- written: this block INSERTs as the owner and the policies above are `for select` only,
--- so without the bracket the inserts are refused — and the after-state reads that prove
--- each sentinel survived would raise 28000 under FORCE with no identity context, which is
--- CTRL-3's whole subject. One bracket, one restore, and CTRL-6 re-reads the catalog to
--- prove the restore happened.
+-- so without the bracket the inserts are refused. PORT NOTE: as `postgres` (BYPASSRLS)
+-- they would succeed without it, and the after-state reads would return rows rather than
+-- raising; the bracket is kept so the file does not depend on the migrating role's
+-- rolbypassrls for its correctness. One bracket, one restore, and CTRL-6 re-reads the
+-- catalog to prove the restore happened.
 --
 -- The truncate legs are genuinely destructive if the gate is absent: a CASCADE that got
 -- through would empty scenario_version, source and scenario_claim along with
@@ -836,11 +992,13 @@ begin
     bad := bad || format(E'\n  CTRL-5 teardown removed % published probe rows, expected 1', n);
   end if;
 
-  -- Both row checks happen HERE, inside the bracket, and not after it. Once FORCE is back
-  -- on, an owner read of this table goes through the qual and raises 28000 with no
-  -- identity context — which is the whole point of CTRL-3 and would turn an after-state
-  -- assertion into an unrelated error. Scoped to the ids this block owns, never to the
-  -- table (V35's rule applied to a migration).
+  -- Both row checks happen HERE, inside the bracket, and not after it. Under FORCE an
+  -- owner read of this table goes through the qual, which with no identity claim matches
+  -- nothing — so an after-state assertion made outside the bracket would read 0 and call
+  -- a surviving probe row "cleaned up". PORT NOTE: before the port that same read RAISED
+  -- 28000, which at least announced itself; now it would simply be wrong and quiet, so
+  -- the placement matters MORE than the original comment claimed, not less. Scoped to the
+  -- ids this block owns, never to the table (V35's rule applied to a migration).
   select count(*) into n from public.rubric_version
    where id in (probe_unpub, probe_pub);
   if n <> 0 then
@@ -939,5 +1097,5 @@ end $$;
 -- against the invoking role when the trigger fires — the same reason 0001's
 -- app.forbid_mutation() has no grant.
 -- ---------------------------------------------------------------------------
-revoke execute on all functions in schema app    from public;
-revoke execute on all functions in schema public from public;
+revoke execute on all functions in schema app    from public, anon;
+revoke execute on all functions in schema public from public, anon, authenticated, service_role;

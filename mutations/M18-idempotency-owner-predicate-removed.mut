@@ -1,0 +1,71 @@
+# M18 — the owner predicate removed from BOTH idempotency lookups.
+#
+# THE LEAK THIS PREDICATE PREVENTS, MEASURED IN BOTH DIRECTIONS (port notes P1).
+#
+# Canon §4.6b stated, and verified at the time, that `app.require_user_id()` inside a
+# SECURITY DEFINER function still resolves to the CALLER, so "a definer function is scoped
+# to the caller's own rows BY THE SAME POLICY that scopes the app role". The first half
+# still holds — `auth.uid()` reads a request-scoped GUC, not the session role. THE SECOND
+# HALF DOES NOT. These functions were owned by `statesman_owner`, which had
+# `rolbypassrls = false` and so was still subject to its own tables under FORCE (V8/V9);
+# the policy ran inside the body. On Supabase they are owned by `postgres`, which IS
+# BYPASSRLS, so RLS IS SKIPPED ENTIRELY INSIDE THESE BODIES.
+#
+# Most statements were already explicitly scoped. ONE WAS NOT: the idempotency lookup in
+# both `submit_decision` and `append_revision` read `where dr.idempotency_token = p_token`
+# with no owner predicate, because the policy supplied one. Under a bypassrls definer it
+# matches ANY user's row, so user B replaying user A's idempotency token receives A's
+# `revision_id` and `revision_no` with `replayed = true` — a cross-tenant identifier leak
+# out of a code path whose entire purpose is to look as though it did nothing. It raises no
+# error and affects no rows, so V7 covers it and nothing else would.
+#
+# Measured as a paired control (port notes §6, legs B2/B3):
+#   * B2 — B replaying A's token against the FIXED code -> ST011, no row returned.
+#   * B3 — the same probe against a mutant with the predicate removed -> B RECEIVED A'S
+#          revision_id with replayed = true. The leak is real and the predicate is what
+#          prevents it.
+#
+# BOTH LOOKUPS IN ONE MUTATION, because they are one obligation: a fix applied to
+# `submit_decision` alone would leave `append_revision` leaking, and the two FIND blocks
+# below are byte-identical, which is precisely why `count: 1` per block with distinct
+# surrounding anchors is used rather than `count: 2` on the bare line.
+#
+# `dr_token_uq` is UNIQUE table-wide, so the predicate cannot change a legitimate replay by
+# the token's own owner.
+#
+# THE CATCHER THIS ENTRY ORIGINALLY NAMED COULD NOT CATCH IT. It pointed at the SAME-USER
+# replay test, and for a single user `and dr.user_id = me` is a no-op, so the mutation left
+# that test green. A control that cannot fail for the thing it names is exactly what this
+# gate exists to surface, and the gate surfaced it. The catcher below is a new
+# cross-tenant test written for this predicate, whose assertion is the property directly:
+# B never learns A's revision_id, by any path.
+id: M18
+title: `and dr.user_id = me` removed from the idempotency lookups in submit_decision and append_revision
+expect: caught
+proves: a SECURITY DEFINER body owned by a BYPASSRLS role gets no RLS for free, so every statement in it must be explicitly scoped (port notes P1)
+proves: an idempotency replay cannot return another tenant's revision id
+expect-test: a cross-tenant replay never returns the other user
+
+file: supabase/migrations/20261021140400_lifecycle_functions.sql
+count: 1
+@@FIND
+  select dr.id, dr.revision_no into rid, n
+    from public.decision_revision dr
+   where dr.idempotency_token = p_token and dr.user_id = me;
+@@REPLACE
+  select dr.id, dr.revision_no into rid, n
+    from public.decision_revision dr
+   where dr.idempotency_token = p_token;
+@@END
+
+file: supabase/migrations/20261021140400_lifecycle_functions.sql
+count: 1
+@@FIND
+  select dr.id, dr.revision_no into rid, existing
+    from public.decision_revision dr
+   where dr.idempotency_token = p_token and dr.user_id = me;
+@@REPLACE
+  select dr.id, dr.revision_no into rid, existing
+    from public.decision_revision dr
+   where dr.idempotency_token = p_token;
+@@END

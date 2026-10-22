@@ -1,0 +1,59 @@
+# M19 — posture rule 11 (BYPASSRLS) made unmatchable.
+#
+# WHY THIS RULE IS THE PORT'S KEYSTONE. ADR-0015 removes two of the three layers that
+# stood between a mistake and the journal: the server boundary and the grant model. RLS is
+# the only wall left, and a BYPASSRLS role walks through it without touching it. Supabase
+# ships FOUR such roles by platform requirement (`postgres`, `service_role`,
+# `supabase_admin`, and `authenticator` by membership), so "no bypassrls roles exist" is
+# not an available posture — the only available posture is "every one of them is named,
+# with a reason, in public.posture_bypassrls_allow". Rule 11 is what makes an UNNAMED one
+# fail the build.
+#
+# The mutation empties the allowlist comparison, so a role that is or can become BYPASSRLS
+# and is NOT allowlisted no longer matches. Nothing else about the function changes: it
+# still enumerates roles, still computes `via`, still formats a message — it simply can
+# never find an offender. That is the shape every posture mutation in this registry uses,
+# and it is the shape a careless "simplification" would produce.
+#
+# BOTH DIRECTIONS MATTER, which is why the catchers are two. V3 measured a role with
+# `rolbypassrls = false` that was a MEMBER of a BYPASSRLS role: it passed an attribute
+# check while `SET ROLE` to it succeeded. A rule that tested only `rolbypassrls` would
+# catch the first and miss the second, so a single catcher would leave the membership leg
+# free to rot.
+#
+# EXPECTATION UNVERIFIED. The mutation gate could not run in the session that registered
+# this (the baseline integration suite is not green — see the port report), so `expect:`
+# is recorded as `uncaught`, which is this registry's honest backlog marker rather than a
+# claim. The two named catchers below are the probes `docs/supabase-port-notes.md` §6
+# records as PASSING by execution (legs D1 and D2) against this exact rule, so promotion
+# to `expect: caught` is expected to be mechanical — but it must be MEASURED first, and
+# `expect-test` must be confirmed to resolve to exactly one test each against a green
+# baseline inventory.
+id: M19
+title: posture rule 11 (BYPASSRLS allowlist) made unmatchable by emptying the allowlist comparison
+expect: uncaught
+todo: promote to `expect: caught` once the baseline is green and both catchers are confirmed to resolve to exactly one test each. Probes D1/D2 passed by execution; the gate has never interpreted this entry.
+proves: rule 11 fires for a role that is BYPASSRLS by ATTRIBUTE and for one that is BYPASSRLS by MEMBERSHIP (V3, V34)
+proves: the only wall left after ADR-0015 cannot be walked around by an unnamed role
+expect-test: [M19] raises ST099 for a BYPASSRLS role that can reach a table
+expect-test: [M19] raises ST099 for a role that is a MEMBER of a bypassrls role
+
+# ANCHOR NOTE: the allowlist line
+# `and g.rolname not in (select rolname from public.posture_bypassrls_allow)` occurs TWICE
+# in this file — rules 11 and 12 share the same registry — so the FIND below includes the
+# rule-11 `exists` clause that precedes it, which is unique. mutations/lib/mutation.mjs
+# exits 2 unless the target text is present EXACTLY the declared number of times, so an
+# ambiguous anchor would have failed the gate's own validation rather than mutating the
+# wrong rule; the anchor is spelled out here so the next person does not shorten it back.
+file: supabase/migrations/20261021140500_verify_security_posture.sql
+count: 1
+@@FIND
+     where exists (select 1 from pg_roles b
+                    where b.rolbypassrls and pg_has_role(g.oid, b.oid, 'MEMBER'))
+       and g.rolname not in (select rolname from public.posture_bypassrls_allow)
+@@REPLACE
+     where exists (select 1 from pg_roles b
+                    where b.rolbypassrls and pg_has_role(g.oid, b.oid, 'MEMBER'))
+       and g.rolname not in (select rolname from public.posture_bypassrls_allow
+                              union all select g.rolname)
+@@END

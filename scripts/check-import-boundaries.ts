@@ -5,9 +5,9 @@
  * specifier string:
  *
  *   R1  pg-outside-db                the `pg` package may be imported only from
- *                                    files under src/server/db/
- *   R2  pool-outside-db              src/server/db/pool.ts may be imported only
- *                                    from within src/server/db/, except for the
+ *                                    files under DB_DIR_REL
+ *   R2  pool-outside-db              DB_DIR_REL/pool.ts may be imported only
+ *                                    from within DB_DIR_REL, except for the
  *                                    four named symbols in
  *                                    POOL_TEST_ONLY_IMPORTS, which tests/ and
  *                                    scripts/ may import BY NAME. See the long
@@ -18,8 +18,27 @@
  *                                    alias.
  *   R4  opaque-specifier             a `require()` / `import()` whose argument is
  *                                    not a string literal cannot be checked at
- *                                    all, so outside src/server/db/ it is itself
+ *                                    all, so outside DB_DIR_REL it is itself
  *                                    the violation.
+ *
+ * ── WHERE DB_DIR_REL POINTS, AND WHY IT MOVED (ADR-0015) ─────────────────────
+ *
+ * It was `src/server/db`. ADR-0015 made the application a static export talking
+ * to Supabase from the browser, so there is no server process and no
+ * server-side pool; the former data boundary now lives in
+ * `tests/support/scoped-pg/`, where the integration harness still needs a
+ * driver to issue arbitrary SQL as a chosen role. The RULE is unchanged — `pg`
+ * is importable from exactly one directory and nowhere else — and it is
+ * strictly stronger in effect than before, because that directory is no longer
+ * under `src/` at all, so no production file can import the driver even inside
+ * the permitted zone.
+ *
+ * Every rule derives its paths from DB_DIR_SEGMENTS below, INCLUDING the two
+ * textual fallback patterns and the selftest mirror. That is deliberate: the
+ * previous version hard-coded `server/db` into those fallbacks, so re-pointing
+ * the constant alone would have left the fallback leg matching a directory that
+ * no longer exists — a rule that still reported "OK" while checking nothing for
+ * any specifier the resolver could not resolve.
  *
  * WHY THE COMPILER API AND NOT A LINT RULE OR A GREP (canon §6.1):
  *   - `no-restricted-imports` matches the specifier STRING, not the resolved
@@ -52,7 +71,7 @@
  *     `acquireAppClient` through a template specifier and the gate never saw it.
  *     An unresolvable specifier is precisely how one evades a resolver-based
  *     rule, so R4 now treats it as the violation. Carve-out: inside
- *     src/server/db/ all four rules permit everything, so an opaque specifier
+ *     tests/support/scoped-pg/ all four rules permit everything, so an opaque specifier
  *     there can hide nothing and is allowed.
  *
  * (b) WHOLE-MODULE ALIASING — `import * as db from '…/server/db'` followed by
@@ -130,11 +149,63 @@ const PG_PACKAGES: readonly string[] = [
   'pg-query-stream',
 ]
 
-const DB_DIR_REL = path.join('src', 'server', 'db')
+/**
+ * THE ONE DIRECTORY THE DRIVER MAY BE IMPORTED FROM, as path segments.
+ *
+ * Segments rather than a joined string because three other things are derived
+ * from it: the POSIX specifier form the selftest fixtures use, and the two
+ * textual fallback patterns below. See the header for why it moved out of
+ * `src/`.
+ */
+const DB_DIR_SEGMENTS: readonly string[] = ['tests', 'support', 'scoped-pg']
+const DB_DIR_REL = path.join(...DB_DIR_SEGMENTS)
+/** The same directory as a module specifier fragment: always `/`, never `\`. */
+const DB_DIR_POSIX = DB_DIR_SEGMENTS.join('/')
+
+/**
+ * The specifier a selftest fixture uses to reach DB_DIR_REL inside the mirror.
+ *
+ * Every offending fixture sits one level below the mirror root (`app/x.ts`,
+ * `tests/x.ts`, `scripts/x.ts`), so one prefix serves all of them. Derived, not
+ * written out, so the fixtures cannot go on referencing a directory the rules
+ * no longer point at — which would turn 24 positive controls into 24 imports of
+ * a module that does not exist, every one of them "clean".
+ */
+const FX_DB = `../${DB_DIR_POSIX}`
 const POOL_BASENAMES: readonly string[] = ['pool.ts', 'pool.tsx', 'pool.mts', 'pool.cts', 'pool.js']
+
+function escapeForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Progressive trailing suffixes of DB_DIR_SEGMENTS, longest first:
+ * `tests/support/scoped-pg`, `support/scoped-pg`, `scoped-pg`.
+ *
+ * The textual fallbacks match ANY of these at a path boundary, which is exactly
+ * what the hard-coded `(?:src/)?server/db` did for the old location: a
+ * specifier naming the directory from any depth is caught, while a bare
+ * `./pool` — writable only from inside the directory, the permitted case — is
+ * not.
+ */
+const DB_DIR_SUFFIX_ALTERNATION = DB_DIR_SEGMENTS.map((_, i) =>
+  escapeForRegExp(DB_DIR_SEGMENTS.slice(i).join('/')),
+).join('|')
+
+/** Fallback for "this specifier names DB_DIR_REL/pool". */
+const POOL_SPECIFIER_FALLBACK = new RegExp(
+  `(?:^|/)(?:${DB_DIR_SUFFIX_ALTERNATION})/pool$`,
+  'i',
+)
+
+/** Fallback for "this specifier names DB_DIR_REL, or one module inside it". */
+const DB_DIR_SPECIFIER_FALLBACK = new RegExp(
+  `(?:^|/)(?:${DB_DIR_SUFFIX_ALTERNATION})(?:/[A-Za-z0-9_.$-]+)?$`,
+  'i',
+)
 const MIGRATOR_EXPORT = 'withMigrator'
 
-/** Consumers of `withMigrator`. `src/server/db` is included because the db module
+/** Consumers of `withMigrator`. `tests/support/scoped-pg` is included because the db module
  *  assembles its own public surface there — `index.ts` re-exporting `withMigrator`
  *  from `./scoped` IS the canon's "only withUser and withMigrator are exported from
  *  the db module", not a leak. The boundary this rule defends is who may *consume*
@@ -144,7 +215,7 @@ const MIGRATOR_ALLOWED_RELS: readonly string[] = ['tests', 'scripts', DB_DIR_REL
 /* ────────────────────────────────────────────────────────────────────────────
  * R2's allowance, and why it is keyed on SYMBOLS rather than on a file.
  *
- * THE CONTRADICTION THIS RESOLVES. src/server/db/index.ts documents its own
+ * THE CONTRADICTION THIS RESOLVES. tests/support/scoped-pg/index.ts documents its own
  * contract as: "NOT exported: … `closePools` and
  * `resetPrivilegeAssertionCacheForTests`, which test setup imports from `./pool`
  * directly." R2 was gated on `!inDbDir` alone, so it flagged exactly the import
@@ -152,15 +223,15 @@ const MIGRATOR_ALLOWED_RELS: readonly string[] = ['tests', 'scripts', DB_DIR_REL
  * committed tree. One of the two sides had to move.
  *
  * WHAT R2 ACTUALLY DEFENDS. Per canon §6.1 and pool.ts's own header: no code
- * outside src/server/db/ may obtain a connection OUTSIDE a scoped transaction,
+ * outside tests/support/scoped-pg/ may obtain a connection OUTSIDE a scoped transaction,
  * so `withUser`'s identity / statement_timeout / DISCARD ALL discipline cannot
  * be sidestepped. The invariant that carries that is narrower than "nobody may
- * name this file": it is **outside src/server/db/ nobody may CONSTRUCT a pool.**
+ * name this file": it is **outside tests/support/scoped-pg/ nobody may CONSTRUCT a pool.**
  * The `Pool` class never leaves the directory, because R1 keeps `pg` inside it,
  * so a test can at most borrow a connection the module itself already made.
  *
  * WHY A SYMBOL LIST AND NOT A SANCTIONED test-only MODULE. A file-shaped
- * allowance ("R2 permits src/server/db/testing.ts from anywhere") is wider and,
+ * allowance ("R2 permits tests/support/scoped-pg/testing.ts from anywhere") is wider and,
  * worse, widens SILENTLY: the next helper somebody adds to that file is
  * permitted with no review, and it sits inside the private directory where the
  * Pool is in scope. A symbol list is enumerable, the enumeration IS the review,
@@ -196,7 +267,7 @@ const MIGRATOR_ALLOWED_RELS: readonly string[] = ['tests', 'scripts', DB_DIR_REL
  *                                         system — with no context set it sees
  *                                         nothing and raises.
  *
- * WHAT STAYS FORBIDDEN EVERYWHERE OUTSIDE src/server/db/:
+ * WHAT STAYS FORBIDDEN EVERYWHERE OUTSIDE tests/support/scoped-pg/:
  *   acquireMigratorClient  a statesman_owner-member connection, which bypasses
  *                          RLS by OWNERSHIP (V4) and is the forgery vector. The
  *                          only sanctioned route is `withMigrator`, which
@@ -654,16 +725,14 @@ function isPoolModule(
   poolFiles: readonly string[],
 ): boolean {
   if (resolved !== undefined && poolFiles.some((p) => samePathish(p, resolved))) return true
-  return /(?:^|\/)(?:server\/)?db\/pool$/i.test(stripModuleExtension(specifier))
+  return POOL_SPECIFIER_FALLBACK.test(stripModuleExtension(specifier))
 }
 
-/** True when the specifier names ANY module inside src/server/db/ — the surface
+/** True when the specifier names ANY module inside DB_DIR_REL — the surface
  *  through which `withMigrator` is reachable by property access (evasion (b)). */
 function isDbDirModule(specifier: string, resolved: string | undefined, dbDir: string): boolean {
   if (resolved !== undefined) return isUnder(resolved, dbDir)
-  return /(?:^|\/)(?:src\/)?server\/db(?:\/[A-Za-z0-9_.$-]+)?$/i.test(
-    stripModuleExtension(specifier),
-  )
+  return DB_DIR_SPECIFIER_FALLBACK.test(stripModuleExtension(specifier))
 }
 
 function checkFile(
@@ -689,7 +758,7 @@ function checkFile(
   for (const ref of refs) {
     // R4 — an opaque specifier, checked FIRST because nothing else can be.
     if (ref.specifier === undefined) {
-      // Inside src/server/db/ all four rules permit everything, so an opaque
+      // Inside tests/support/scoped-pg/ all four rules permit everything, so an opaque
       // specifier there cannot hide a violation of any of them.
       if (!inDbDir) {
         violations.push({
@@ -709,7 +778,7 @@ function checkFile(
 
     const resolved = resolve(ref.specifier, file)
 
-    // R1 — the pg package only from src/server/db/
+    // R1 — the pg package only from tests/support/scoped-pg/
     const pgPkg = pgPackageFor(ref.specifier, resolved)
     if (pgPkg !== undefined && !inDbDir) {
       violations.push({
@@ -723,7 +792,7 @@ function checkFile(
       })
     }
 
-    // R2 — the private pool module only from within src/server/db/, plus the
+    // R2 — the private pool module only from within tests/support/scoped-pg/, plus the
     // narrow named-symbol allowance for tests/ and scripts/ documented above.
     const pool = isPoolModule(ref.specifier, resolved, poolFiles)
     if (pool && !inDbDir) {
@@ -876,7 +945,7 @@ function selftestFixtures(): readonly Fixture[] {
   // needs no nested template escapes.
   const tick = '`'
   const templateSpecifier =
-    `const B = '../src/server/db'\n` + `export const m = await import(${tick}\${B}/pool${tick})\n`
+    `const B = '${FX_DB}'\n` + `export const m = await import(${tick}\${B}/pool${tick})\n`
 
   return [
     // ── evasion (a): a specifier this checker cannot evaluate ────────────────
@@ -908,37 +977,37 @@ function selftestFixtures(): readonly Fixture[] {
     // ── evasion (b): the module is aliased whole ─────────────────────────────
     {
       rel: 'app/launder-namespace.ts',
-      code: "import * as db from '../src/server/db'\nexport const w = db.withMigrator\n",
+      code: `import * as db from '${FX_DB}'\nexport const w = db.withMigrator\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'evasion (b): `import * as` never writes the identifier',
     },
     {
       rel: 'app/launder-default.ts',
-      code: "import db from '../src/server/db'\nexport const w = db\n",
+      code: `import db from '${FX_DB}'\nexport const w = db\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'evasion (b): a default binding carries the module object',
     },
     {
       rel: 'app/launder-dynamic.ts',
-      code: "const db = await import('../src/server/db')\nexport const w = db.withMigrator\n",
+      code: `const db = await import('${FX_DB}')\nexport const w = db.withMigrator\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'evasion (b): a dynamic import bound to a plain identifier',
     },
     {
       rel: 'app/launder-star-export.ts',
-      code: "export * from '../src/server/db'\n",
+      code: `export * from '${FX_DB}'\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'evasion (b): `export *` re-exposes withMigrator under a new surface',
     },
     {
       rel: 'app/launder-namespace-export.ts',
-      code: "export * as db from '../src/server/db'\n",
+      code: `export * as db from '${FX_DB}'\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'evasion (b): `export * as ns` does the same through a namespace',
     },
     {
       rel: 'app/launder-import-equals.ts',
-      code: "import db = require('../src/server/db')\nexport const w = db\n",
+      code: `import db = require('${FX_DB}')\nexport const w = db\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'evasion (b): `import x = require()` carries the whole module',
     },
@@ -947,7 +1016,7 @@ function selftestFixtures(): readonly Fixture[] {
     {
       rel: 'app/case-pool.ts',
       code:
-        "import { acquireMigratorClient } from '../src/server/db/Pool'\n" +
+        `import { acquireMigratorClient } from '${FX_DB}/Pool'\n` +
         'export const a = acquireMigratorClient\n',
       expect: ['pool-outside-db'],
       why: 'evasion (c): db/Pool resolves on a case-insensitive filesystem',
@@ -994,31 +1063,31 @@ function selftestFixtures(): readonly Fixture[] {
     // ── R2 and R3 baselines ─────────────────────────────────────────────────
     {
       rel: 'app/pool-relative.ts',
-      code: "import { closePools } from '../src/server/db/pool'\nexport const c = closePools\n",
+      code: `import { closePools } from '${FX_DB}/pool'\nexport const c = closePools\n`,
       expect: ['pool-outside-db'],
       why: 'R2: the allowance does NOT extend outside tests/ and scripts/',
     },
     {
       rel: 'app/pool-namespace.ts',
-      code: "import * as p from '../src/server/db/pool'\nexport const c = p\n",
+      code: `import * as p from '${FX_DB}/pool'\nexport const c = p\n`,
       expect: ['pool-outside-db'],
       why: 'R2: whole-module import of the pool',
     },
     {
       rel: 'app/migrator-named.ts',
-      code: "import { withMigrator } from '../src/server/db'\nexport const w = withMigrator\n",
+      code: `import { withMigrator } from '${FX_DB}'\nexport const w = withMigrator\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'R3 baseline',
     },
     {
       rel: 'app/migrator-aliased.ts',
-      code: "import { withMigrator as wm } from '../src/server/db'\nexport const w = wm\n",
+      code: `import { withMigrator as wm } from '${FX_DB}'\nexport const w = wm\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'R3: the alias keeps the original name in propertyName',
     },
     {
       rel: 'app/migrator-require-property.ts',
-      code: "export const w: unknown = require('../src/server/db').withMigrator\n",
+      code: `export const w: unknown = require('${FX_DB}').withMigrator\n`,
       expect: ['with-migrator-outside-tests'],
       why: 'R3: a property read off require()',
     },
@@ -1032,13 +1101,13 @@ function selftestFixtures(): readonly Fixture[] {
     },
     {
       rel: 'app/clean-public-surface.ts',
-      code: "import { withUser } from '../src/server/db'\nexport const u = withUser\n",
+      code: `import { withUser } from '${FX_DB}'\nexport const u = withUser\n`,
       expect: [],
       why: 'negative control: withUser is the sanctioned entry point',
     },
     {
       rel: 'app/clean-side-effect-import.ts',
-      code: "import '../src/server/db'\nexport {}\n",
+      code: `import '${FX_DB}'\nexport {}\n`,
       expect: [],
       why: 'negative control: a bare import binds nothing, so it launders nothing',
     },
@@ -1047,15 +1116,15 @@ function selftestFixtures(): readonly Fixture[] {
     {
       rel: 'tests/pool-teardown-allowed.ts',
       code:
-        "import { closePools, resetPrivilegeAssertionCacheForTests } from '../src/server/db/pool'\n" +
+        `import { closePools, resetPrivilegeAssertionCacheForTests } from '${FX_DB}/pool'\n` +
         'export const t = [closePools, resetPrivilegeAssertionCacheForTests]\n',
       expect: [],
-      why: 'THE ALLOWANCE: exactly the import src/server/db/index.ts prescribes',
+      why: 'THE ALLOWANCE: exactly the import tests/support/scoped-pg/index.ts prescribes',
     },
     {
       rel: 'tests/pool-guard-allowed.ts',
       code:
-        "import { assertUnprivilegedOnce } from '../src/server/db/pool'\n" +
+        `import { assertUnprivilegedOnce } from '${FX_DB}/pool'\n` +
         'export const g = assertUnprivilegedOnce\n',
       expect: [],
       why: 'THE ALLOWANCE: the role guard, needed to write its positive control',
@@ -1063,14 +1132,14 @@ function selftestFixtures(): readonly Fixture[] {
     {
       rel: 'scripts/pool-acquire-app-allowed.ts',
       code:
-        "import { acquireAppClient } from '../src/server/db/pool'\n" +
+        `import { acquireAppClient } from '${FX_DB}/pool'\n` +
         'export const a = acquireAppClient\n',
       expect: [],
       why: 'THE ALLOWANCE: in scripts/ too, for the 28000 / 42501 paired controls',
     },
     {
       rel: 'tests/migrator-allowed.ts',
-      code: "import { withMigrator } from '../src/server/db'\nexport const w = withMigrator\n",
+      code: `import { withMigrator } from '${FX_DB}'\nexport const w = withMigrator\n`,
       expect: [],
       why: 'R3 zone: tests/ may consume the migrator wrapper',
     },
@@ -1084,28 +1153,28 @@ function selftestFixtures(): readonly Fixture[] {
     },
     {
       rel: 'tests/pool-constructor-denied.ts',
-      code: "import { Pool } from '../src/server/db/pool'\nexport const p = Pool\n",
+      code: `import { Pool } from '${FX_DB}/pool'\nexport const p = Pool\n`,
       expect: ['pool-outside-db'],
       why: 'NARROWNESS: Pool is not on the allowance, whatever module it comes from',
     },
     {
       rel: 'tests/pool-migrator-client-denied.ts',
       code:
-        "import { acquireMigratorClient } from '../src/server/db/pool'\n" +
+        `import { acquireMigratorClient } from '${FX_DB}/pool'\n` +
         'export const a = acquireMigratorClient\n',
       expect: ['pool-outside-db'],
       why: 'NARROWNESS: the RLS-bypassing connection stays behind withMigrator',
     },
     {
       rel: 'tests/pool-namespace-denied.ts',
-      code: "import * as p from '../src/server/db/pool'\nexport const c = p\n",
+      code: `import * as p from '${FX_DB}/pool'\nexport const c = p\n`,
       expect: ['pool-outside-db'],
       why: 'NARROWNESS: a namespace object reaches every export, so it is refused',
     },
     {
       rel: 'tests/pool-mixed-denied.ts',
       code:
-        "import { closePools, acquireMigratorClient } from '../src/server/db/pool'\n" +
+        `import { closePools, acquireMigratorClient } from '${FX_DB}/pool'\n` +
         'export const m = [closePools, acquireMigratorClient]\n',
       expect: ['pool-outside-db'],
       why: 'NARROWNESS: one name off the allowance poisons the whole reference',
@@ -1113,31 +1182,31 @@ function selftestFixtures(): readonly Fixture[] {
     {
       rel: 'tests/pool-case-denied.ts',
       code:
-        "import { acquireMigratorClient } from '../src/server/db/POOL'\n" +
+        `import { acquireMigratorClient } from '${FX_DB}/POOL'\n` +
         'export const a = acquireMigratorClient\n',
       expect: ['pool-outside-db'],
       why: 'NARROWNESS: the allowance is not a way around the case fold',
     },
     {
       rel: 'tests/opaque-denied.ts',
-      code: "const n = '../src/server/db/pool'\nexport const m = await import(n)\n",
+      code: `const n = '${FX_DB}/pool'\nexport const m = await import(n)\n`,
       expect: ['opaque-specifier'],
       why: 'NARROWNESS: tests/ get no exemption from R4',
     },
 
     // ── negative controls INSIDE the permitted directory ────────────────────
     {
-      rel: 'src/server/db/permitted.ts',
+      rel: `${DB_DIR_POSIX}/permitted.ts`,
       code:
         "import { Pool } from 'pg'\n" +
         "import { acquireMigratorClient } from './pool'\n" +
         "import { withMigrator } from './index'\n" +
         'export const all = [Pool, acquireMigratorClient, withMigrator]\n',
       expect: [],
-      why: 'negative control: all four rules permit src/server/db/ itself',
+      why: 'negative control: all four rules permit tests/support/scoped-pg/ itself',
     },
     {
-      rel: 'src/server/db/opaque-permitted.ts',
+      rel: `${DB_DIR_POSIX}/opaque-permitted.ts`,
       code: "const n = 'pg'\nexport const m = await import(n)\n",
       expect: [],
       why: "negative control: R4's documented carve-out inside the db directory",
@@ -1147,11 +1216,12 @@ function selftestFixtures(): readonly Fixture[] {
 
 function buildSelftestMirror(mirror: string, root: string): void {
   rmSync(mirror, { recursive: true, force: true })
-  mkdirSync(path.join(mirror, 'src', 'server', 'db'), { recursive: true })
+  const mirrorDbDir = path.join(mirror, DB_DIR_REL)
+  mkdirSync(mirrorDbDir, { recursive: true })
 
   writeFileSync(path.join(mirror, 'tsconfig.json'), `${SELFTEST_TSCONFIG}\n`)
-  writeFileSync(path.join(mirror, 'src', 'server', 'db', 'pool.ts'), SELFTEST_POOL_STUB)
-  writeFileSync(path.join(mirror, 'src', 'server', 'db', 'index.ts'), SELFTEST_INDEX_STUB)
+  writeFileSync(path.join(mirrorDbDir, 'pool.ts'), SELFTEST_POOL_STUB)
+  writeFileSync(path.join(mirrorDbDir, 'index.ts'), SELFTEST_INDEX_STUB)
 
   // Symlinked, not copied: 'pg' and 'pg-pool' must resolve from inside the
   // mirror so R1's resolved-package leg is genuinely exercised.

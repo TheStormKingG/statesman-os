@@ -31,10 +31,10 @@
  *     observability test deliberately blocks a backend and asserts
  *     `state='active'` and `wait_event_type='Lock'` are actually visible.
  *     MEASURED REFINEMENT, after this suite asserted V24 too broadly and failed:
- *     that visibility is ROLE-SCOPED. `statesman_app` sees another
- *     `statesman_app` backend in full, and sees only NULLs for a backend of a
+ *     that visibility is ROLE-SCOPED. `authenticated` sees another
+ *     `authenticated` backend in full, and sees only NULLs for a backend of a
  *     different role. Both are asserted here, the second against a deliberately
- *     parked migrator/owner backend paired with an admin read of the same pid.
+ *     parked `postgres` backend paired with an admin read of the same pid.
  *   - the revision-number read helper is required to produce DIFFERENT values
  *     when run sequentially around a real append, because the V23 control's
  *     central assertion is `leaderNext === followerNext`, and that is not
@@ -61,7 +61,7 @@ import {
   StatesmanError,
   appendRevision,
   submitDecision,
-} from '../../src/server/db'
+} from '../support/scoped-pg'
 import {
   Gate,
   appRole,
@@ -311,7 +311,7 @@ describe('concurrency instruments', () => {
       privilegedWaitType = observation?.waitEventType
       privilegedWaitEvent = observation?.waitEvent
 
-      // The same read, as statesman_app. See the refinement of V24 below.
+      // The same read, as the app role. See the refinement of V24 below.
       const asApp = await observeBackends([followerPid], { role: appRole() })
       appRowCount = asApp.byPid.size
       const appObservation = asApp.byPid.get(followerPid)
@@ -348,16 +348,15 @@ describe('concurrency instruments', () => {
     // pid with state and wait_event_type NULL", and this test originally
     // asserted that for the follower's pid — and FAILED, with
     // `expected 'active' to be undefined`. The detail columns are ROLE-SCOPED:
-    // `statesman_app` sees another `statesman_app` backend in full, including a
+    // `authenticated` sees another `authenticated` backend in full, including a
     // live Lock wait. V24's NULLs apply to a backend of a DIFFERENT role, which
     // the next test reproduces directly.
     //
     // So the app role would in fact have served as this suite's observer. The
     // instrument still observes as the admin role, because the visibility is a
     // property of the PARTIES' roles rather than of the instrument: a future
-    // test that parked a migrator or owner transaction would be told "never
-    // blocked" by an app-role observer, silently and in the healthy-looking
-    // direction. `BlockProbe.observedState` is the guard against that, and it is
+    // test that parked a `postgres` transaction would be told "never blocked"
+    // by an app-role observer, silently and in the healthy-looking direction. `BlockProbe.observedState` is the guard against that, and it is
     // asserted in every negative result in this file.
     // ───────────────────────────────────────────────────────────────────────
     expect(appRowCount, 'the app role should see one pg_stat_activity row per pid').toBe(1)

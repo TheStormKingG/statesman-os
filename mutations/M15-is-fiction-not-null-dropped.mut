@@ -24,7 +24,7 @@ expect: caught
 proves: FR-02's fiction flag is enforced by a constraint that a test can see disappear
 expect-test: is_fiction and as_of_date are NOT NULL, and both agree with the case body fiction notice
 
-file: migrations/0008_scenario_content.sql
+file: supabase/migrations/20261021140700_scenario_content.sql
 count: 1
 @@FIND
   is_fiction        boolean not null,

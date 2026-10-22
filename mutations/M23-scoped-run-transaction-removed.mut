@@ -1,0 +1,53 @@
+# M23 — the explicit transaction removed from the harness's claim-carrying scoped run.
+#
+# THE HAZARD, MEASURED. `set_config(name, value, true)` is `SET LOCAL`. Issued OUTSIDE an
+# explicit transaction block it is scoped to that single statement, and the NEXT statement
+# reads the EMPTY STRING. Measured on the emulation as `authenticated`:
+#
+#     select set_config('request.jwt.claim.sub', '…dead', true);
+#     select coalesce(nullif(current_setting('request.jwt.claim.sub', true),''),'<EMPTY>');
+#     -- <EMPTY>
+#
+# whereas the same two statements inside `begin; … rollback;` return the id, and
+# `auth.uid()` returns it too.
+#
+# WHY THAT IS A SECURITY PROPERTY AND NOT A STYLE POINT. Pre-port, a statement with no
+# identity RAISED 28000, so a lost `SET LOCAL` announced itself. `auth.uid()` returns NULL
+# instead: a claimless read of a protected table returns zero rows and raises nothing. So a
+# scoped run that lost its BEGIN would execute every subsequent statement as NOBODY, see
+# zero rows everywhere, raise nothing — and PASS. Every denial assertion in the suite would
+# become unfailable, which means unproven. This project has already had three separate
+# checks invalidated by a `SET LOCAL` that did nothing, which is why `runScopedAs` asserts
+# the setting took effect rather than assuming it.
+#
+# WHAT THE MUTATION DOES. It replaces the opening `begin` with a no-op, leaving the
+# `set_config` calls, the server-side assertion and the caller's SQL exactly where they
+# were. The assertion is what must fire: the DO block raises ST099 because the claim GUC
+# reads back empty, psql exits non-zero, and `runScopedAs` rejects. The named catcher is
+# the sentinel integrity assertion, which is the first thing in the suite to take a scoped
+# read — and note that it fails as a FAILED TEST rather than a skipped one, which matters
+# because a guard that aborts during fixture setup yields SKIPPED tests that no
+# `expect-test` can match.
+#
+# EXPECTATION UNVERIFIED: the gate could not run in the session that registered this (red
+# baseline). The underlying measurement above WAS executed.
+# PROMOTED from `expect: uncaught`. The gate reported it PROMOTABLE: its named
+# catcher now fails when the mutation is applied, so the guard is controlled and
+# the registry should say so. The promotion precondition in the old `todo:` line
+# (a green integration baseline) is met.
+id: M23
+title: the opening BEGIN removed from runScopedAs, so SET LOCAL silently does nothing
+expect: caught
+proves: the scoped-run helper asserts the identity claim TOOK EFFECT instead of assuming it
+proves: a lost transaction makes every protected read return 0 rows and raise nothing, so it must fail loudly here
+expect-test: every protected table shows exactly 1 sentinel row to the sentinel user and 0 to anyone else
+
+file: tests/integration/support/db.ts
+count: 1
+@@FIND
+    'begin;\n' +
+    `select set_config('${CLAIM_SUB_GUC}', :'${SCOPED_UID_VAR}', true);\n` +
+@@REPLACE
+    'select 1 as no_transaction_here;\n' +
+    `select set_config('${CLAIM_SUB_GUC}', :'${SCOPED_UID_VAR}', true);\n` +
+@@END

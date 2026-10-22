@@ -11,9 +11,12 @@
  *     with check (app.require_user_id() is not null)
  *
  * and the whole integration suite stayed green at 44/44. The weakening was then
- * shown to be EXPLOITABLE: as `statesman_app` under user B's identity context,
- * an INSERT into `public.decision_revision` carrying user A's `user_id`
- * SUCCEEDED. A revision is the permanent record FR-04 exists to protect, so a
+ * shown to be EXPLOITABLE: as the app role under user B's identity context, an
+ * INSERT into `public.decision_revision` carrying user A's `user_id` SUCCEEDED.
+ * (Post-port the predicates read `auth.uid()` rather than
+ * `app.require_user_id()`, and the weakened form `auth.uid() is not null` is if
+ * anything EASIER to reach, because a missing identity no longer raises — it
+ * simply makes the predicate false instead of aborting the statement.) A revision is the permanent record FR-04 exists to protect, so a
  * forged one is not a tenancy inconvenience — it is an attack on the integrity
  * of the journal, and it was untested.
  *
@@ -49,9 +52,15 @@
  * ---------------------------------------------------------------------------
  * HOW THE WRITES ARE ROUTED
  * ---------------------------------------------------------------------------
- * Every attack and every control goes through the real `withUser` (§8.3) as
- * `statesman_app`, so the policy under test is the one production runs. Two
- * deliberate choices:
+ * Every attack and every control goes through the harness's `withUser` seam
+ * (§8.3) as `authenticated`, which is the role PostgREST resolves a signed-in
+ * browser to (ADR-0015 §8.3). The SEAM is test-only now — ADR-0015 retires
+ * `withUser` from everything that ships — but THE POLICY UNDER TEST IS THE ONE
+ * THAT SHIPS: `decision_revision_tenancy` in 20261021140300 is applied verbatim
+ * to the live project, and `authenticated` is the role it will be evaluated
+ * against there. That distinction is the whole reason this file still earns its
+ * place while boundary-guards.test.ts had to be re-labelled. Two deliberate
+ * choices:
  *
  *   - an ATTACK uses `db.query`, never `db.queryAffectingOne`. A failing policy
  *     affects zero rows and raises nothing (V7), and `queryAffectingOne` turns
@@ -68,7 +77,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ensureWorkerDatabase, ownerQuery, releaseProductionPools, runAsUser } from './support/db'
-import { PermissionDeniedError, StatesmanError } from '../../src/server/db'
+import { PermissionDeniedError, StatesmanError } from '../support/scoped-pg'
 import { SENTINEL_USER_ID } from './support/sentinels'
 
 // ---------------------------------------------------------------------------
@@ -214,15 +223,24 @@ async function countAs(userId: string, sql: string, id: string): Promise<number>
 beforeAll(async () => {
   await ensureWorkerDatabase()
 
-  // app_user is grant-protected — statesman_app has no privilege on it at all
-  // (§4.6) — so the owner seeds it. `on conflict do nothing` keeps the file
-  // re-runnable without a DELETE, which decision_revision's append-only
-  // triggers would forbid anyway (V32).
+  // The identity rows go in through the owner connection because `auth.users` is
+  // the platform's table and `authenticated` holds nothing on it (port finding
+  // P8). The pre-port reason — grant-absence on `app_user` — is retired with the
+  // table. `on conflict do nothing` keeps the file re-runnable without a DELETE,
+  // which decision_revision's append-only triggers would forbid anyway (V32).
   await ownerQuery(
-    `insert into public.app_user (id, email, password_hash, algo_ver)
-     values (:'a', 'a-forgery@statesman.invalid', '!not-a-hash:fixture-cannot-authenticate', 1),
-            (:'b', 'b-forgery@statesman.invalid', '!not-a-hash:fixture-cannot-authenticate', 1)
-     on conflict (id) do nothing;`,
+    `-- PORTED (ADR-0015): public.app_user is retired; 20261021140200 replaces the three
+     -- identity tables with public.profile, whose PK carries a REAL foreign key to
+     -- auth.users(id) ON DELETE RESTRICT, so the auth row must exist first. No credential
+     -- column is written: encrypted_password is nullable and NULL can never verify against
+     -- anything, which is stronger than the retired malformed-argon2 trick.
+     insert into auth.users (id, email, created_at, updated_at)
+     values (:'a', 'a-forgery@statesman.invalid', now(), now()),
+            (:'b', 'b-forgery@statesman.invalid', now(), now())
+     on conflict (id) do nothing;
+     insert into public.profile (user_id, display_name)
+     values (:'a', 'forgery fixture A'), (:'b', 'forgery fixture B')
+     on conflict (user_id) do nothing;`,
     { a: USER_A, b: USER_B },
   )
 
@@ -282,15 +300,30 @@ beforeAll(async () => {
  * off would make the rest of the run vacuous and fail nothing locally.
  */
 async function removeFixtureRows(): Promise<void> {
-  // The row counts are read INSIDE the bracket, before FORCE goes back on, and
-  // that placement is a measured fact rather than a convenience: the first
-  // version of this function read them afterwards and psql returned
+  // THE REASON FOR THIS PLACEMENT HAS BEEN INVERTED BY THE PORT, and the old
+  // justification is recorded rather than deleted because it was a measurement.
+  //
+  // It read: the counts must be inside the bracket, because the first version of
+  // this function read them afterwards and psql returned
   // `ERROR: 28000: no user context` from `select count(*) from public.decision`
-  // — as statesman_owner, under FORCE, with no identity context. The owner is
-  // subject to its own tenancy policy (V8/V9), and the policy's accessor raises
-  // rather than returning 0 (the same fact posture rule 9 is built on). The
-  // catalog read that proves the bracket CLOSED runs after the commit, where it
-  // belongs, because pg_class and pg_trigger are readable regardless of RLS.
+  // — as the schema owner, under FORCE, with no identity context. That owner was
+  // `rolbypassrls = false` (V34), so it was subject to its own tenancy policy
+  // (V8/V9) and the policy's raising accessor fired.
+  //
+  // POST-PORT NEITHER HALF HOLDS. `ownerQuery` connects as `postgres`, which is
+  // BYPASSRLS, so RLS is not applied to this connection with or without FORCE;
+  // and the policies call `auth.uid()`, which returns NULL rather than raising.
+  // MEASURED on this cluster: as `postgres`, with `relforcerowsecurity` TRUE and
+  // no claim set, `select count(*) from public.decision` returns the sentinel row
+  // and raises nothing. So these counts would now read correctly on either side
+  // of the bracket.
+  //
+  // They stay inside it anyway, for a reason that does not depend on the role: a
+  // count taken inside the same transaction as the DELETE is a statement about
+  // what the DELETE did, and one taken after the COMMIT is a statement about what
+  // the database looks like once other work may have intervened. The catalog read
+  // that proves the bracket CLOSED runs after the commit, where it belongs,
+  // because pg_class and pg_trigger are readable regardless of RLS.
   const after = await ownerQuery(
     `begin;
      alter table public.decision          no force row level security;
@@ -298,7 +331,21 @@ async function removeFixtureRows(): Promise<void> {
      alter table public.decision_revision disable trigger user;
      delete from public.decision_revision where user_id in (:'a'::uuid, :'b'::uuid);
      delete from public.decision          where user_id in (:'a'::uuid, :'b'::uuid);
-     delete from public.app_user          where id      in (:'a'::uuid, :'b'::uuid);
+     -- PORTED (ADR-0015): public.app_user is retired. The identity now lives in
+     -- public.profile with a REAL foreign key to auth.users(id) ON DELETE RESTRICT, so
+     -- the order below is load-bearing in a way the single DELETE was not: revisions,
+     -- then decisions, then the profile, then the auth row. RESTRICT means a profile
+     -- still holding decisions refuses to go, which is canon 5.2 working as intended —
+     -- erasure is a deliberate path, never a cascade.
+     delete from public.profile           where user_id in (:'a'::uuid, :'b'::uuid);
+     -- The auth.users row is deliberately NOT deleted. scripts/emulate-supabase.sh grants
+     -- the postgres role only SELECT, INSERT and REFERENCES on auth.users, withholding
+     -- UPDATE and
+     -- DELETE on purpose (port finding P8): GoTrue owns identities, and a harness that
+     -- deleted one would be editing another system's table — on the live project it would
+     -- be deleting a real account. MEASURED: the DELETE fails with 42501, which is the
+     -- emulation refusing exactly as the deployed target would. The profile row is ours
+     -- and is removed; the worker database is dropped at teardown anyway.
      -- Every count here is SCOPED. An unscoped count is a whole-table claim, and
      -- vitest.integration.config.ts shares one clone across every file in the worker
      -- (isolate false), so a global count measures which siblings ran first rather than
@@ -314,8 +361,8 @@ async function removeFixtureRows(): Promise<void> {
               where user_id in (:'a'::uuid, :'b'::uuid)),
             (select count(*)::text from public.decision_revision
               where user_id in (:'a'::uuid, :'b'::uuid)),
-            (select count(*)::text from public.app_user
-              where id in (:'a'::uuid, :'b'::uuid));
+            (select count(*)::text from public.profile
+              where user_id in (:'a'::uuid, :'b'::uuid));
      alter table public.decision_revision enable  trigger user;
      alter table public.decision          force row level security;
      alter table public.decision_revision force row level security;
@@ -356,9 +403,11 @@ async function removeFixtureRows(): Promise<void> {
         'file in this worker would read them as its own',
     )
   }
-  if (rows[3] !== '0') {
-    throw new Error(`fixture cleanup left ${String(rows[3])} of this file's app_user rows`)
-  }
+  // A third block used to sit here re-testing `rows[3] !== '0'` and calling the
+  // result "app_user rows". It was unreachable — the combined check above already
+  // covers rows[3] — and its message named a table that no longer exists, so it
+  // has been REMOVED rather than re-pointed. `rows[5]` is the profile count and is
+  // asserted above, which is the claim the dead block was reaching for.
   if (guards[1] !== '2') {
     throw new Error(
       `the NO FORCE bracket did not close: ${String(guards[1])} of 2 tables are ` +

@@ -3,8 +3,9 @@
  *
  * What this file tests is the reference-data half of the schema: `scenario`,
  * `scenario_version`, `source`, `scenario_claim` and `rubric_version` as built by
- * `migrations/0008_scenario_content.sql`, and the single seeded case DEMO-PH-001 as
- * written by `migrations/0009_seed_demo_ph_001.sql`.
+ * `supabase/migrations/20261021140700_scenario_content.sql`, and the single seeded case
+ * DEMO-PH-001 as written by
+ * `supabase/migrations/20261021140800_seed_demo_ph_001.sql`.
  *
  * TAG MAPPING. Each tag is quoted from the acceptance condition in docs/PRD.md §6.1 /
  * §6.2 rather than inferred from the requirement's title, because a tag that names a
@@ -109,9 +110,10 @@
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { StatesmanError, submitDecision } from '../../src/server/db'
-import type { UserScopedClient } from '../../src/server/db'
+import { StatesmanError, submitDecision } from '../support/scoped-pg'
+import type { UserScopedClient } from '../support/scoped-pg'
 import {
+  EXPECTED_APP_ROLE,
   appQuery,
   ensureWorkerDatabase,
   ownerQuery,
@@ -272,13 +274,21 @@ const APP_DELETE_CLAIM_SQL =
 /* Catalog reads. No identity context is needed for these, and none is set: they are the
  * one class of read that works either side of a FORCE boundary (0008 CTRL-6's rule). */
 
+// PORTED (ADR-0015 §4.1). This query named `statesman_app` as a LITERAL, and that role
+// still EXISTS in this local cluster as a leftover of the pre-port bootstrap — so after
+// the port it did not error, it quietly returned `false` for every privilege, including
+// SELECT. A test asserting `sel = 'true'` then failed for a reason that looked like a
+// missing grant and was actually a measurement of the wrong role. The role the browser
+// resolves to is `authenticated`, and it is read from EXPECTED_APP_ROLE rather than
+// spelled again, so the connection the suite asserts about and the role this query asks
+// about cannot drift apart.
 const APP_PRIVILEGES_SQL =
   "select c.relname, " +
-  "has_table_privilege('statesman_app', c.oid, 'SELECT')::text, " +
-  "has_table_privilege('statesman_app', c.oid, 'INSERT')::text, " +
-  "has_table_privilege('statesman_app', c.oid, 'UPDATE')::text, " +
-  "has_table_privilege('statesman_app', c.oid, 'DELETE')::text, " +
-  "has_table_privilege('statesman_app', c.oid, 'TRUNCATE')::text " +
+  "has_table_privilege(:'role', c.oid, 'SELECT')::text, " +
+  "has_table_privilege(:'role', c.oid, 'INSERT')::text, " +
+  "has_table_privilege(:'role', c.oid, 'UPDATE')::text, " +
+  "has_table_privilege(:'role', c.oid, 'DELETE')::text, " +
+  "has_table_privilege(:'role', c.oid, 'TRUNCATE')::text " +
   'from pg_class c join pg_namespace n on n.oid = c.relnamespace ' +
   "where n.nspname = 'public' and c.relkind = 'r' and c.relname in " +
   "('scenario','scenario_version','source','scenario_claim','rubric_version') " +
@@ -338,9 +348,16 @@ const RLS_STATE_SQL =
   "('scenario','scenario_version','source','scenario_claim','rubric_version') " +
   'order by c.relname'
 
+// PORTED (ADR-0015): public.app_user is retired. `public.profile.user_id` carries a REAL
+// foreign key to `auth.users (id)`, so an identity fixture creates the auth row first —
+// the chain is decision -> profile -> auth.users. :'hash' is still accepted as a psql
+// variable by every call site and is simply not used: no credential column exists to
+// write it to, which is strictly stronger than storing an unusable encoding.
 const INSERT_APP_USER_SQL =
-  'insert into public.app_user (id, email, password_hash, algo_ver) ' +
-  "values (:'id', :'email', :'hash', 1);"
+  'insert into auth.users (id, email, created_at, updated_at) ' +
+  "values (:'id', :'email', now(), now()) on conflict (id) do nothing; " +
+  'insert into public.profile (user_id, display_name) ' +
+  "values (:'id', :'email') on conflict (user_id) do nothing;"
 
 /** Not a valid argon2 encoding, so no credential can ever verify against it. */
 const UNUSABLE_HASH = '!not-a-hash:scenario-content-fixture-cannot-authenticate'
@@ -586,26 +603,41 @@ describe('scenario content — Slice 2 reference data', () => {
   })
 
   // 2 ----------------------------------------------------------------
-  it('[FR-01][NFR-01] every reference table raises 28000 for an uncontexted read and returns rows with context', async () => {
-    // The GATE. `app.require_user_id()` raises rather than returning NULL (V5), so an
-    // unauthenticated read of reference data is refused and not silently empty. This is
-    // the control for the posture decision recorded in this file's header: the policy
-    // admits any authenticated identity, which is not the same thing as admitting
-    // everyone.
+  it('[FR-01][NFR-01] every reference table returns 0 rows and RAISES NOTHING for a claimless read, and rows with a claim', async () => {
+    // THE GATE, REWRITTEN RATHER THAN RE-POINTED. This asserted a RAISED 28000, on the
+    // ground that `app.require_user_id()` raises rather than returning NULL (V5), so an
+    // unauthenticated read of reference data was refused LOUDLY and not silently empty.
+    //
+    // `auth.uid()` returns NULL. MEASURED here as `authenticated` with no claim: 0 rows
+    // and NO error. So the refusal still happens — the policy `auth.uid() is not null` is
+    // false — but it no longer announces itself. The assertion is therefore inverted, and
+    // a RAISE is now the anomaly: it would mean something is reproducing the retired
+    // semantics, or that a 42501/42P01 is wearing the denial's clothes.
+    //
+    // This is also why 20261021140700 had to REGISTER these five tables in
+    // public.posture_sentinel_row (rule 9b). Under the pre-port rule 9 they were waived,
+    // and the zero below would then have been indistinguishable from an empty table — the
+    // sentinel row is the only thing that makes it mean denial (V18).
     for (const table of REFERENCE_TABLES) {
-      const probe = `select count(*) from public.${table};`
+      const probe = `select 'n', count(*)::text from public.${table};`
       let code: string | undefined
+      let rows: string[][] | undefined
       try {
-        await appQuery(probe)
+        rows = await appQuery(probe)
       } catch (error: unknown) {
         code = PG_ERROR_WITH_CODE.exec(messageOf(error))?.[1]
       }
-      expect(code, `uncontexted read of public.${table}`).toBe('28000')
+      expect(code, `claimless read of public.${table} must raise nothing`).toBeUndefined()
+      expect(
+        rows?.find((r) => r[0] === 'n')?.[1],
+        `claimless read of public.${table}`,
+      ).toBe('0')
     }
 
-    // POSITIVE CONTROL. Same role, same tables, the only difference being that an
-    // identity context is open. Without this leg the 28000 above is satisfied by a
-    // broken connection, a missing table or a typo'd role.
+    // POSITIVE CONTROL, and post-port it carries the whole weight of the assertion. Same
+    // role, same tables; the only difference is that a claim is set. Without this leg the
+    // zero above is satisfied by a broken connection, a missing table, a typo'd role, a
+    // failed seed — or a policy that denies everyone, which is V18 exactly.
     const counts = await runAsUser(user, async (db) => {
       const out: Record<string, number> = {}
       for (const table of REFERENCE_TABLES) {
@@ -623,10 +655,10 @@ describe('scenario content — Slice 2 reference data', () => {
   })
 
   // 3 ----------------------------------------------------------------
-  it('[FR-02][NFR-01] statesman_app holds SELECT only: INSERT, UPDATE and DELETE each raise 42501 from the absent grant', async () => {
+  it('[FR-02][NFR-01] `authenticated` holds SELECT only: INSERT, UPDATE and DELETE each raise 42501 from the absent grant', async () => {
     // Leg 1 — the catalog. This is what notices a `grant insert` added later, which the
     // SQLSTATE assertions below could NOT distinguish from the absent INSERT policy.
-    const privileges = await appQuery(APP_PRIVILEGES_SQL)
+    const privileges = await appQuery(APP_PRIVILEGES_SQL, { role: EXPECTED_APP_ROLE })
     expect(privileges).toHaveLength(REFERENCE_TABLES.length)
     for (const row of privileges) {
       const [name, sel, ins, upd, del, trunc] = row

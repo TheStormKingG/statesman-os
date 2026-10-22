@@ -60,10 +60,10 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { MILESTONES, appendRevision, stampMilestone, submitDecision } from '../../src/server/db'
-import type { MigratorClient, RevisionInput, SqlParams } from '../../src/server/db'
-import { UnauthenticatedError } from '../../src/server/db/errors'
-import { enterIdentityContext, resolveSession } from '../../src/server/session/resolve'
+import { MILESTONES, appendRevision, stampMilestone, submitDecision } from '../support/scoped-pg'
+import type { MigratorClient, RevisionInput, SqlParams } from '../support/scoped-pg'
+import { UnauthenticatedError } from '../support/scoped-pg/errors'
+import { enterIdentityContext, resolveSession } from '../support/scoped-pg/session'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -72,8 +72,9 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
  * ------------------------------------------------------------------ */
 
 /**
- * Taken from `migrations/0006_sentinels.sql`, `tests/integration/support/
- * sentinels.ts` and `tests/integration/state-machine.test.ts`. Every one of them
+ * Taken from `supabase/migrations/20261021140600_sentinels.sql`,
+ * `tests/integration/support/sentinels.ts` and
+ * `tests/integration/state-machine.test.ts`. Every one of them
  * has a `0` version nibble, which is exactly why `z.uuid()` cannot be used.
  */
 const REAL_IDENTIFIERS = [
@@ -204,7 +205,7 @@ describe('identifiers use z.guid(), not z.uuid()', () => {
       expect(
         z.uuid().safeParse(id).success,
         `z.uuid() now ACCEPTS ${id}. Zod's RFC 9562 enforcement changed, so the ` +
-          'comment in src/server/session/resolve.ts needs re-measuring — but this is ' +
+          'comment in tests/support/scoped-pg/session.ts needs re-measuring — but this is ' +
           'still not permission to swap guid for uuid without re-running it.',
       ).toBe(false)
       expect(
@@ -231,13 +232,29 @@ describe('identifiers use z.guid(), not z.uuid()', () => {
     // explains why, the second is what actually catches the edit.
     //
     // MEASURED, and the reason this walks the AST rather than grepping: a
-    // regex over the file text reported `src/server/db/scoped.ts` and
-    // `src/server/session/resolve.ts` as offenders on the first run. Both
+    // regex over the file text reported the two files that are now
+    // `tests/support/scoped-pg/scoped.ts` and
+    // `tests/support/scoped-pg/session.ts` as offenders on the first run. Both
     // mentions are in COMMENTS explaining why z.uuid() is not used — the
     // comment that documents the rule tripped the check that enforces it.
     // `ts.createSourceFile` sees call expressions and not prose, which is the
     // same argument scripts/check-import-boundaries.ts makes for itself.
-    const sources = typescriptFilesUnder(join(REPO_ROOT, 'src'))
+    //
+    // ADR-0015 NOTE: those two files left `src/` with the rest of the former
+    // server data boundary, so `src/` is now the production tree alone and the
+    // only `.guid()` calls under it are in `src/lib/supabase/**`. The positive
+    // control below is therefore load-bearing in a new way: if the Supabase
+    // data layer is ever deleted or stops validating identifiers, this test
+    // fails rather than passing over an empty scan.
+    // The validators moved out of `src/` during the Supabase port (ADR-0015): the
+    // pg-based scoped access now lives under tests/support/scoped-pg/. Scanning only
+    // `src/` therefore found no `.guid()` call at all, and this test's own
+    // anti-vacuity assertion fired rather than reporting a clean pass over nothing —
+    // which is the behaviour that makes it worth having. Scan both roots.
+    const sources = [
+      ...typescriptFilesUnder(join(REPO_ROOT, 'src')),
+      ...typescriptFilesUnder(join(REPO_ROOT, 'tests', 'support', 'scoped-pg')),
+    ]
     expect(sources.length, 'no source files were scanned, so this check proves nothing').toBeGreaterThan(0)
 
     const offenders: string[] = []

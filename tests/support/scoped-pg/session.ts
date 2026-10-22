@@ -1,4 +1,8 @@
 /**
+ * TEST-ONLY (ADR-0015). Was src/server/db|src/server/session; it has no production
+ * role now that the app talks to Supabase from the browser. See ./index.ts for
+ * what moved, why, and the GUC incompatibility with supabase/migrations/.
+ *
  * Session resolution. The ONLY way `withUser` learns who the caller is.
  *
  * Slice 1b replaces the body of `resolveSession` with the real cookie ->
@@ -19,7 +23,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { z } from 'zod'
-import { UnauthenticatedError } from '../db/errors'
+import { UnauthenticatedError } from './errors'
 
 /**
  * `declare const` means this symbol has NO runtime value: there is no brand

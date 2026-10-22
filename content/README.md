@@ -1,7 +1,8 @@
 # Scenario content — editorial rules for whoever writes case 2
 
 This directory holds the editorial source of truth for STATESMAN OS training cases. One
-case exists: `demo-ph-001.json`, seeded by `migrations/0009_seed_demo_ph_001.sql`.
+case exists: `demo-ph-001.json`, seeded by
+`supabase/migrations/20261021140800_seed_demo_ph_001.sql`.
 
 Read this before writing a case. The rules below are not house style. Three of them are
 product requirements with database controls behind them, and a case that breaks one fails
@@ -35,7 +36,7 @@ precisely and you never have to pretend a real document says something it does n
 
 ### What the database enforces
 
-`migrations/0009` reads the rows back after writing them and aborts the migration with
+`20261021140800_seed_demo_ph_001.sql` reads the rows back after writing them and aborts the migration with
 `ST022` unless all of the following hold for the case being seeded:
 
 | Control | What fails the build |
@@ -144,7 +145,7 @@ So the register is not metadata; it is the case.
 
 ### Write the register once, and let the database derive the rows
 
-`migrations/0009` does **not** retype the claims into `INSERT … VALUES`. It inserts the case
+`20261021140800_seed_demo_ph_001.sql` does **not** retype the claims into `INSERT … VALUES`. It inserts the case
 body as `scenario_version.content` and then derives both `source` and `scenario_claim` from
 that jsonb with `jsonb_to_recordset`. Transcribing 47 claims twice would put a drift defect
 one typo away; deriving them makes the body and the register identical by construction.
@@ -276,7 +277,7 @@ ids and `z.uuid()` would reject them, so every identifier validator in this proj
 
 ### The drift check
 
-`migrations/0009` splices this directory's JSON verbatim into a dollar-quoted literal, so
+`20261021140800_seed_demo_ph_001.sql` splices this directory's JSON verbatim into a dollar-quoted literal, so
 the file and the seeded row start identical. To re-verify after any edit:
 
 ```sh
@@ -314,7 +315,8 @@ measurement behind that.
 3. Ground all five lenses, and build real conflicts between claims rather than describing
    conflict in prose.
 4. Record the PRD 8.1 elements — SEED-7 lists them and fails on a missing one.
-5. Write `migrations/00NN_seed_<case>.sql` on the shape of `0009`: bracket
+5. Write `supabase/migrations/<CLI-timestamp>_seed_<case>.sql` on the shape of
+   `20261021140800_seed_demo_ph_001.sql`: bracket
    `no force` / `force` (V8/V9 — the policies are `for select` only, so an owner insert under
    FORCE is refused outright), insert the body, derive `source` and `scenario_claim` from it,
    assert counts against the register length **and** a floor (V7), scope every count to the

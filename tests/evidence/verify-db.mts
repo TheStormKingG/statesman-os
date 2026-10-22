@@ -6,11 +6,11 @@
 // closePools / acquireAppClient / assertUnprivilegedOnce are on R2's named
 // allowance for tests/ and scripts/ (see POOL_TEST_ONLY_IMPORTS).
 const { withUser, submitDecision, stampMilestone, mapDatabaseError } = await import(
-  '/Users/stefangravesande/Documents/Projects/Stathos/src/server/db/index')
+  '/Users/stefangravesande/Documents/Projects/Stathos/tests/support/scoped-pg/index')
 const { enterIdentityContext } = await import(
-  '/Users/stefangravesande/Documents/Projects/Stathos/src/server/session/resolve')
+  '/Users/stefangravesande/Documents/Projects/Stathos/tests/support/scoped-pg/session')
 const { assertUnprivilegedOnce, acquireAppClient, closePools } = await import(
-  '/Users/stefangravesande/Documents/Projects/Stathos/src/server/db/pool')
+  '/Users/stefangravesande/Documents/Projects/Stathos/tests/support/scoped-pg/pool')
 
 const USER_A = 'aaaaaaaa-0000-0000-0000-000000000001'
 let fails = 0

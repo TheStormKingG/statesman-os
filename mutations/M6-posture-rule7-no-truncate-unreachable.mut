@@ -4,16 +4,26 @@
 # append-only guarantee rests on BEFORE TRUNCATE statement triggers AND on the absence of
 # the TRUNCATE grant. Rule 7 is the check on the second half. Like rule 3, it had no
 # control when the adversarial pass ran and `if false then` left the suite green at 44/44.
+# WHY `authenticator` AND NOT `__never_a_role__`, measured rather than guessed:
+# `has_table_privilege` on a role that does not exist RAISES
+# `role "__never_a_role__" does not exist`. That makes verify_security_posture()
+# itself throw, so the migration's closing posture call fails, the template is never
+# built, and the suite runs ZERO tests — the gate reported MISATTRIBUTED because the
+# named control could not run, which was accurate. M5 gets away with the same
+# placeholder because its predicate is a STRING COMPARISON
+# (`pg_get_userbyid(...) in (...)`), not a catalog lookup.
+# `authenticator` exists on both Supabase and the emulation and holds no table
+# privileges, so the clause is unmatchable while the function still runs.
 id: M6
 title: posture rule 7 NO TRUNCATE replaced by `if false then`
 expect: caught
 proves: posture rule 7 (canon 4.8 rule 7, V15) has a control
-expect-test: [M6] raises ST099 for TRUNCATE granted to statesman_app on decision_revision
+expect-test: [M6] raises ST099 for TRUNCATE granted to authenticated on decision_revision
 
-file: migrations/0005_verify_security_posture.sql
+file: supabase/migrations/20261021140500_verify_security_posture.sql
 count: 1
 @@FIND
-  if has_table_privilege('statesman_app','public.decision_revision','TRUNCATE') then
+      and has_table_privilege('authenticated', c.oid, 'TRUNCATE')
 @@REPLACE
-  if false then
+      and has_table_privilege('authenticator', c.oid, 'TRUNCATE')
 @@END

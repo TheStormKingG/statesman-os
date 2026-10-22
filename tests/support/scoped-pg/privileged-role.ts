@@ -1,4 +1,8 @@
 /**
+ * TEST-ONLY (ADR-0015). Was src/server/db|src/server/session; it has no production
+ * role now that the app talks to Supabase from the browser. See ./index.ts for
+ * what moved, why, and the GUC incompatibility with supabase/migrations/.
+ *
  * THE ONE RULE: what makes a Postgres role too privileged to serve user data.
  *
  * WHY THIS FILE EXISTS. The rule was previously written out twice, by hand, in

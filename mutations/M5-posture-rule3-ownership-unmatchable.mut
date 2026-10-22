@@ -13,12 +13,12 @@ id: M5
 title: posture rule 3 OWNERSHIP compares relowner to a role name that cannot exist
 expect: caught
 proves: posture rule 3 (canon 4.8 rule 3, V4) has a control that names the offending table
-expect-test: [M5] raises ST099 for a public table owned by statesman_app
+expect-test: [M5] raises ST099 for a public table owned by authenticated
 
-file: migrations/0005_verify_security_posture.sql
+file: supabase/migrations/20261021140500_verify_security_posture.sql
 count: 1
 @@FIND
-      and pg_get_userbyid(c.relowner) = 'statesman_app'
+      and pg_get_userbyid(c.relowner) in ('anon','authenticated','service_role')
 @@REPLACE
-      and pg_get_userbyid(c.relowner) = '__never_a_role__'
+      and pg_get_userbyid(c.relowner) in ('__never_a_role__')
 @@END

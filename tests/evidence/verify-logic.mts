@@ -4,9 +4,9 @@ import {
   FrozenDraftError, RowCountError, InvalidDecisionStateError, BadMilestoneError, PostureError,
   IdempotencyReplayError, RevisionNumberConflictError, UniqueViolationError, UnknownDatabaseError,
   NotFoundError, StatesmanError,
-} from '/Users/stefangravesande/Documents/Projects/Stathos/src/server/db/index'
-import { resolveSession, enterIdentityContext, isIdentityContextActive } from '/Users/stefangravesande/Documents/Projects/Stathos/src/server/session/resolve'
-import { withMigrator } from '/Users/stefangravesande/Documents/Projects/Stathos/src/server/db/index'
+} from '/Users/stefangravesande/Documents/Projects/Stathos/tests/support/scoped-pg/index'
+import { resolveSession, enterIdentityContext, isIdentityContextActive } from '/Users/stefangravesande/Documents/Projects/Stathos/tests/support/scoped-pg/session'
+import { withMigrator } from '/Users/stefangravesande/Documents/Projects/Stathos/tests/support/scoped-pg/index'
 
 let fails = 0
 function check(name: string, ok: boolean, extra = '') {

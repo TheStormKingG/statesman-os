@@ -1,8 +1,8 @@
 # M8 — posture rules 9 (SENTINELS) and 10 (NOT NULL) made unmatchable.
 #
 # HISTORY, because it changes what this mutation means. When the adversarial pass ran,
-# rules 9 and 10 were NOT IMPLEMENTED at all: canon §4.8 names ten rules and
-# migrations/0005 carried eight, and nothing asserted the missing two. Both were
+# rules 9 and 10 were NOT IMPLEMENTED at all: canon §4.8 names ten rules and the
+# pre-port migrations/0005 carried eight, and nothing asserted the missing two. Both were
 # implemented on 2026-10-21. So M8 is no longer "the rule is missing" — it is the standing
 # proof that the rules now present cannot be hollowed out unnoticed.
 #
@@ -15,6 +15,15 @@
 # THREE named catchers must fail: sentinel missing, sentinel duplicated ("exactly one" in
 # the other direction), and nullable user_id. Matching any one of them would let the other
 # two rot.
+# RE-POINTED FOR THE SUPABASE SHAPE. The first FIND was the bare `if n <> 1 then`, which
+# was unique in the pre-port migrations/0005 (that set has since been deleted; it is in git
+# history at commit b3a5f59). The port split rule 9 into 9a (owner-keyed) and 9b
+# (reference tables registered in public.posture_sentinel_row), so that line now occurs
+# TWICE while this mutation declares `count: 1` — and mutations/lib/mutation.mjs exits 2
+# unless the target text was present EXACTLY the declared number of times. The anchor was
+# therefore extended with the rule-9a message line, which is unique. It is the rule 9a leg
+# that this mutation has always hollowed out; M20 is the separate control for 9b, which
+# under the pre-port rule was waived and had no control at all.
 id: M8
 title: posture rules 9 SENTINELS and 10 NOT NULL both made unmatchable
 expect: caught
@@ -23,15 +32,17 @@ expect-test: [M8] raises ST099 for the sentinel rows deleted
 expect-test: [M8] raises ST099 for a SECOND row owned by the sentinel
 expect-test: [M8] raises ST099 for a nullable user_id column
 
-file: migrations/0005_verify_security_posture.sql
+file: supabase/migrations/20261021140500_verify_security_posture.sql
 count: 1
 @@FIND
         if n <> 1 then
+          bad := bad || format(E'\n  rule 9a: sentinel rows in %s: %s, expected exactly 1',
 @@REPLACE
         if false then
+          bad := bad || format(E'\n  rule 9a: sentinel rows in %s: %s, expected exactly 1',
 @@END
 
-file: migrations/0005_verify_security_posture.sql
+file: supabase/migrations/20261021140500_verify_security_posture.sql
 count: 1
 @@FIND
        and not a.attnotnull

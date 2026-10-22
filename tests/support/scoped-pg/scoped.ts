@@ -1,4 +1,8 @@
 /**
+ * TEST-ONLY (ADR-0015). Was src/server/db|src/server/session; it has no production
+ * role now that the app talks to Supabase from the browser. See ./index.ts for
+ * what moved, why, and the GUC incompatibility with supabase/migrations/.
+ *
  * The scoped entry points: `withUser`, `withMigrator`, and typed wrappers for the
  * SECURITY DEFINER lifecycle functions.
  *
@@ -17,7 +21,7 @@ import {
   statementTimeoutMs,
 } from './pool'
 import { ContextMismatchError, MigratorMisuseError, RowCountError, mapDatabaseError } from './errors'
-import { isIdentityContextActive, resolveSession } from '../session/resolve'
+import { isIdentityContextActive, resolveSession } from './session'
 
 /* ------------------------------------------------------------------ *
  * The narrow query surface
@@ -114,9 +118,26 @@ function makeQueries(client: PoolClient, describe: string): ScopedQueries {
  * ------------------------------------------------------------------ */
 
 const SET_CONFIG_SQL = 'select set_config($1, $2, true) as applied'
-const REQUIRE_USER_SQL = 'select app.require_user_id()::text as user_id'
 
-const requireUserRow = z.object({ user_id: z.guid() })
+/**
+ * The identity probe. ADR-0015 §4.3: identity now travels as `request.jwt.claim.sub` and
+ * is read by `auth.uid()`, which is the seam canon §4.3 was built for.
+ *
+ * It reads `auth.uid()` and NOT `app.require_user_id()`, deliberately. The raising wrapper
+ * still exists in 20261021140100 and is still used by the lifecycle SECURITY DEFINER
+ * functions, but probing it HERE would measure the wrapper rather than the identity the
+ * POLICIES actually consult — and the policies call `auth.uid()` directly, precisely so
+ * that the local target has no failure mode the live one lacks.
+ *
+ * The claim GUC is also read back, because `auth.uid()` NULL has two different causes
+ * that need different messages: a claim that never arrived (SET LOCAL outside a
+ * transaction) and a claim that arrived but did not resolve.
+ */
+const IDENTITY_PROBE_SQL =
+  "select auth.uid()::text as user_id, " +
+  "nullif(current_setting('request.jwt.claim.sub', true), '') as claim"
+
+const identityProbeRow = z.object({ user_id: z.guid(), claim: z.guid() })
 
 /**
  * Open the transaction and install the identity, in the canon's order.
@@ -135,21 +156,52 @@ const requireUserRow = z.object({ user_id: z.guid() })
 async function beginScopedTransaction(client: PoolClient, userId: string): Promise<void> {
   await client.query('begin')
   await client.query(SET_CONFIG_SQL, ['statement_timeout', String(statementTimeoutMs())])
-  await client.query(SET_CONFIG_SQL, ['app.current_user_id', userId])
+  // Both GUC forms are written. `auth.uid()` coalesces the flattened
+  // `request.jwt.claim.sub` with the `sub` member of the JSON `request.jwt.claims`
+  // (Supabase's published definition, reproduced by scripts/emulate-supabase.sh), so
+  // setting one while a stale value sat in the other would resolve to whichever the
+  // coalesce prefers. Pooled connections make a stale value a real possibility.
+  await client.query(SET_CONFIG_SQL, ['request.jwt.claim.sub', userId])
+  await client.query(SET_CONFIG_SQL, ['request.jwt.claims', ''])
 
-  const probe = await client.query(REQUIRE_USER_SQL)
+  const probe = await client.query(IDENTITY_PROBE_SQL)
   if (probe.rows.length !== 1) {
     throw new ContextMismatchError(
-      `app.require_user_id() returned ${String(probe.rows.length)} rows; expected exactly 1`,
+      `the identity probe returned ${String(probe.rows.length)} rows; expected exactly 1`,
     )
   }
-  const parsed = requireUserRow.safeParse(probe.rows[0])
+  const parsed = identityProbeRow.safeParse(probe.rows[0])
   if (!parsed.success) {
-    throw new ContextMismatchError(`app.require_user_id() returned an unexpected shape: ${parsed.error.message}`)
+    // THE PORT'S MOST IMPORTANT FAILURE MESSAGE. `app.require_user_id()` raised 28000
+    // when identity was missing; `auth.uid()` returns NULL (MEASURED). A NULL identity
+    // does not deny loudly any more — every protected table returns 0 rows and raises
+    // nothing — so without this check a transaction with no identity would run to
+    // completion and every assertion inside it would pass against nobody.
+    //
+    // V6's fail-loud property is GONE FROM THE POLICY PATH and cannot be put back there:
+    // a policy predicate that raised would give the local target a failure mode the live
+    // one does not have, and every local denial test would then be measuring the wrapper.
+    // What this line does is keep the property IN THE INSTRUMENT, which is the one place
+    // the port still permits it.
+    throw new ContextMismatchError(
+      'the identity probe did not return a usable uuid, so this transaction has NO ' +
+        'identity: ' +
+        `${parsed.error.message}. auth.uid() returns NULL rather than raising 28000, and ` +
+        'a NULL identity reads 0 rows from every protected table while raising nothing — ' +
+        'so this must fail here or it will not fail at all. The usual cause is a ' +
+        'set_config(..., true) that ran outside an explicit transaction, where SET LOCAL ' +
+        'silently does nothing.',
+    )
+  }
+  if (parsed.data.claim.toLowerCase() !== userId) {
+    throw new ContextMismatchError(
+      `the claim GUC holds '${parsed.data.claim}' but '${userId}' was just set; the ` +
+        'identity did not reach the transaction',
+    )
   }
   if (parsed.data.user_id.toLowerCase() !== userId) {
     throw new ContextMismatchError(
-      'app.require_user_id() does not agree with the identity just set; abandoning the transaction',
+      'auth.uid() does not agree with the identity just set; abandoning the transaction',
     )
   }
 }

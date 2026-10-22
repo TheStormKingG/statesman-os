@@ -50,6 +50,39 @@ Slice 1) must be rewritten to assert the Supabase equivalent: `current_user =
 `request.jwt.claim.sub` present. Pointing it at `postgres` must abort the run, and that
 needs its own mutation proving it bites.
 
+
+## 2b. The default-privilege hazard, now CONFIRMED on the live project
+
+`docs/supabase-port-notes.md` flagged this as the one thing to verify before the first
+push, because the earlier survey of this project never read `pg_default_acl`. It has now
+been read, and the hazard is real.
+
+`pg_default_acl` carries 24 rows. For tables in `public`, both `postgres` and
+`supabase_admin` grant `arwdDxtm` to **`anon`** — insert, select, update, delete, truncate,
+references, trigger and maintain. Measured decisively, in a rolled-back transaction on the
+live project:
+
+```
+anon   SELECT=true INSERT=true UPDATE=true DELETE=true
+relacl {postgres=arwdDxtm/postgres, anon=arwdDxtm/postgres,
+        authenticated=arwdDxtm/postgres, service_role=arwdDxtm/postgres}
+```
+
+**This inverts the fail-closed property the canon claims at §4.2.** On local Postgres we
+deliberately omit `ALTER DEFAULT PRIVILEGES … GRANT` on tables, so a forgotten grant yields
+an *invisible* table — the safe direction. On Supabase the platform pre-grants everything to
+the anonymous role, so a forgotten `REVOKE`, or a table shipped without RLS enabled, yields
+a table that an unauthenticated caller on the internet can read and write.
+
+Two consequences, both already in force:
+
+1. Posture rule 1 (anything `authenticated` or `anon` can reach must be RLS-enabled AND
+   forced AND carry a policy) and rule 4 extended to `anon` are **the only barrier** between
+   a newly added table and the public. They are not belt-and-braces here.
+2. The local emulation reproduces the permissive defaults on purpose. An emulation that is
+   safer than its target never exercises the REVOKEs, so the first time they would matter is
+   production. Recorded as V36.
+
 ## 3. What carries over, and what is retired
 
 Verified on the remote inside a rolled-back transaction: `CREATE TABLE`, `ENABLE` and

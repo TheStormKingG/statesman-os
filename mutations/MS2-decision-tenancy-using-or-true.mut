@@ -12,20 +12,41 @@
 # Expect a wide blast radius — around eighteen tests go red. That is informative rather
 # than a problem: attribution here is by NAME, so a broad failure is still pinned to the
 # two assertions that are supposed to notice.
+# ATTRIBUTED, NOT ASSUMED. This mutation was MISATTRIBUTED by the gate before this note
+# existed: the suite reported exit=1 with tests=0 passed=0 failed=0, so the two test
+# catchers it named could not possibly have failed. Reproducing it in a scratch mirror
+# gave the real cause, which is better news than a test failure:
+#
+#   20261021140600_sentinels.sql:252  ERROR: SENTINEL PAIRED CONTROL FAILED
+#
+# The sentinel migration seeds one sentinel per protected table and then asserts, as a
+# PAIRED control, that a non-owner sees 0 and the owner sees 1. Weakening the tenancy
+# policy to `... or true` makes everyone see everything, the control fires, and the
+# migration ABORTS. The database is never built, so no test ever runs.
+#
+# A migration-time control that refuses to build a wrong database is strictly stronger
+# than a test that notices afterwards, so the correct expectation here is the abort, not
+# a test name. `#abort` says that explicitly.
+#
+# NOTE A GAP THIS LEAVES, deliberately recorded rather than hidden: because the build
+# stops first, MS2 no longer demonstrates that the integration SUITE would catch a
+# wide-open tenancy policy. That was verified separately by hand, by applying the
+# weakening AFTER the migrations ran so only the suite could notice, across all eight
+# forced-RLS policies, each caught. Registering a post-build variant would make that
+# permanent and is the obvious next addition here.
 id: MS2
 title: decision tenancy USING weakened to `... or true`, keeping rule 8 satisfied
 expect: caught
+expect-test: #abort
 proves: the sentinel rows make a cross-user READ denial non-vacuous (canon 8.1, V18)
 proves: a tenancy regression that survives the posture check is still caught by a test
-expect-test: every protected table shows exactly 1 sentinel row to the sentinel user and 0 to anyone else
-expect-test: user B reads 0 of A's decisions and 0 of A's revisions
 
-file: migrations/0003_decision.sql
+file: supabase/migrations/20261021140300_decision.sql
 count: 1
 @@FIND
 create policy decision_tenancy on public.decision
-  using (user_id = app.require_user_id())
+  using (user_id = auth.uid())
 @@REPLACE
 create policy decision_tenancy on public.decision
-  using (user_id = app.require_user_id() or true)
+  using (user_id = auth.uid() or true)
 @@END

@@ -146,8 +146,14 @@ describe('[INV-03] state is derived by one function used twice (canon 4.4, V29)'
       `begin;
        alter table public.decision no force row level security;   -- V8 bracket OPEN
 
-       insert into public.app_user (id, email, password_hash, algo_ver)
-       values (:'uid', :'email', :'hash', 1);
+       -- PORTED (ADR-0015): public.app_user is retired. public.profile.user_id carries a
+       -- REAL foreign key to auth.users(id), so the auth row goes in first. :'hash' is
+       -- still passed by the call site and is deliberately unused — there is no
+       -- credential column here to write it to.
+       insert into auth.users (id, email, created_at, updated_at)
+       values (:'uid', :'email', now(), now()) on conflict (id) do nothing;
+       insert into public.profile (user_id, display_name)
+       values (:'uid', :'email') on conflict (user_id) do nothing;
 
        -- One row per combination. The timestamps are distinct per milestone so a row
        -- that came back with the wrong columns populated is visible, not merely "set".
@@ -320,7 +326,7 @@ describe('[INV-03] state is derived by one function used twice (canon 4.4, V29)'
        select 'rows',
               (select count(*)::text from public.decision where user_id = :'sentinel'::uuid),
               (select count(*)::text from public.decision where user_id = :'uid'::uuid),
-              (select count(*)::text from public.app_user where id = :'uid'::uuid);
+              (select count(*)::text from public.profile where user_id = :'uid'::uuid);
        alter table public.decision force row level security;`,
       { uid: PROBE_USER_ID, sentinel: SENTINEL_USER_ID },
     )
@@ -359,8 +365,14 @@ describe('[INV-03] NEW.state is NULL in BEFORE UPDATE on a generated column (V28
       `begin;
        alter table public.decision no force row level security;
 
-       insert into public.app_user (id, email, password_hash, algo_ver)
-       values (:'uid', :'email', :'hash', 1);
+       -- PORTED (ADR-0015): public.app_user is retired. public.profile.user_id carries a
+       -- REAL foreign key to auth.users(id), so the auth row goes in first. :'hash' is
+       -- still passed by the call site and is deliberately unused — there is no
+       -- credential column here to write it to.
+       insert into auth.users (id, email, created_at, updated_at)
+       values (:'uid', :'email', now(), now()) on conflict (id) do nothing;
+       insert into public.profile (user_id, display_name)
+       values (:'uid', :'email') on conflict (user_id) do nothing;
        insert into public.decision (id, user_id) values (:'did', :'uid');
 
        create function app.probe_generated_state() returns trigger

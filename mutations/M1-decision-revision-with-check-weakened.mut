@@ -19,14 +19,14 @@ proves: a cross-user INSERT forgery into the append-only revision table is rejec
 expect-test: B inserting a decision_revision under A's user_id is rejected by the WITH CHECK
 expect-test: the forged-owner and foreign-parent cases report different SQLSTATEs
 
-file: migrations/0003_decision.sql
+file: supabase/migrations/20261021140300_decision.sql
 count: 1
 @@FIND
 create policy decision_revision_tenancy on public.decision_revision
-  using (user_id = app.require_user_id())
-  with check (user_id = app.require_user_id());
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
 @@REPLACE
 create policy decision_revision_tenancy on public.decision_revision
-  using (user_id = app.require_user_id())
-  with check (app.require_user_id() is not null);
+  using (user_id = auth.uid())
+  with check (auth.uid() is not null);
 @@END

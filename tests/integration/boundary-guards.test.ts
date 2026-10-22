@@ -1,5 +1,40 @@
 /**
- * Boundary guards — controls for four guards that were proven VACUOUS.
+ * Boundary guards — controls for four guards of the TEST HARNESS, not of the product.
+ *
+ * ===========================================================================
+ * READ THIS BEFORE READING ANY TEST BELOW: WHAT THESE FOUR GUARDS NOW PROTECT
+ * ===========================================================================
+ * Under ADR-0015 the application is a static export talking to Supabase from the
+ * browser. There is no Node request path and no server-side connection pool, so
+ * ADR-0015 §6/§6.1 retires `withUser`, `assertUnprivilegedOnce()`, the eager
+ * identity probe and `DISCARD ALL` **from everything that ships**. The code that
+ * holds them moved from `src/server/db/**` to `tests/support/scoped-pg/**` and
+ * its own module headers say "TEST-ONLY (ADR-0015) … it has no production role".
+ *
+ * So the four guards below protect exactly one thing: **this integration
+ * harness's own `pg` access.** That is a smaller claim than this file used to
+ * make, and it is stated here, in each `describe` title, and in each test's own
+ * comment, so nobody can read a green run as evidence about the product.
+ *
+ * It is still a claim worth gating, and that is why all four controls were KEPT
+ * (option (a) of the port's decision) rather than deleted:
+ *
+ *   `runAsUser` → `withUser` is the seam tenancy.test.ts, forgery.test.ts,
+ *   lifecycle.test.ts, concurrency.test.ts and scenario-content.test.ts take
+ *   every data assertion through. Post-port a harness that lost its identity,
+ *   its role check, its session hygiene or its row-count assertion does not go
+ *   red — it goes GREEN while addressing nobody, because `auth.uid()` returns
+ *   NULL where `app.require_user_id()` raised `28000`, and a NULL identity reads
+ *   0 rows from every protected table while raising nothing (ADR-0015's first
+ *   measured loss). These four guards are what stop that from happening
+ *   silently, so without them the suite's other 70-odd assertions are
+ *   unfalsifiable.
+ *
+ * WHAT WAS LOST ANYWAY, recorded rather than quietly re-labelled: the
+ * production-side versions of all four are gone with the server, and with them
+ * the second and third of the journal's three layers (ADR-0015 "RLS becomes the
+ * only wall"). The properties that *survive* in shipped form survive as posture
+ * rules 11/12 and the harness role guard, not as anything in this file.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS FILE EXISTS
@@ -8,16 +43,17 @@
  * time, and re-ran the integration suite. Four removals left the suite green at
  * 44/44, which means the suite could not see the guard at all:
  *
- *   M2  `withUser`'s eager `select app.require_user_id()` replaced with a
- *       fabricated local row.
+ *   M2  the eager identity probe in `beginScopedTransaction` replaced with a
+ *       fabricated local row. Post-port the probe reads `auth.uid()`, so the
+ *       instrument below swaps `auth.uid()` and not `app.require_user_id()`.
  *   M3  `await assertUnprivilegedOnce()` deleted from `withUser`.
  *   M4  the `DISCARD ALL` block deleted from `finishScopedTransaction`
  *       (canon §7.6 names pooled-identity leak a RELEASE BLOCKER).
  *   M7  `queryAffectingOne`'s `rowCount !== 1` assertion replaced with
  *       `if (false)`.
  *
- * All four were separately measured as WORKING in production. They were not
- * broken; they were unobserved. This file observes them.
+ * All four were separately measured as WORKING. They were not broken; they were
+ * unobserved. This file observes them — in their current, harness-only home.
  *
  * ---------------------------------------------------------------------------
  * THE RULE EVERY TEST HERE OBEYS
@@ -45,19 +81,30 @@
  * worker shares one process AND one cloned database. Two tests here mutate
  * shared state, so both restore it:
  *
- *   - M2 swaps `app.require_user_id()` by RENAME, not by `create or replace`.
+ *   - M2 swaps `auth.uid()` by RENAME, not by `create or replace`.
  *     The tenancy policies bind the function by OID, so renaming the original
  *     leaves `decision` / `decision_revision` enforcement pointing at the REAL
- *     function throughout — only `withUser`'s preamble, which resolves the name
- *     at parse time, sees the impostor. Restoring is a drop plus a rename back,
+ *     function throughout — only the harness's transaction preamble, which
+ *     resolves the name at parse time, sees the impostor. MEASURED on this
+ *     emulation: during the swap `pg_get_expr(polqual)` for `decision_tenancy`
+ *     reads `(user_id = auth.uid_shadowed())`, and after the restore it reads
+ *     `(user_id = auth.uid())` again. Restoring is a drop plus a rename back,
  *     with no function body text round-tripped and no policy ever dropped.
+ *
+ *     THE SWAP RUNS AS THE CLUSTER SUPERUSER, not as `postgres`. Port finding P9:
+ *     schema `auth` is platform-owned (`supabase_auth_admin` live, the bootstrap
+ *     role in the emulation), so `postgres` gets "permission denied for schema
+ *     auth" — which is a property worth having, because it means no migration in
+ *     `supabase/migrations/` can weaken the platform's identity accessor even by
+ *     accident. Only an out-of-band instrument like this one can, which is why
+ *     the restore is verified from the catalog rather than inferred.
  *   - M3 repoints `APP_DATABASE_URL` and closes the module-private pools.
  *     `afterEach` puts the worker's URL back, clears the cached privilege
  *     verdict and closes the pools again, so the next file in this worker builds
  *     a fresh pool against its own database.
  *
  * Both use `releaseProductionPools()` from the harness rather than reaching into
- * `src/server/db/pool.ts`. That module is module-private — the eslint boundary
+ * `tests/support/scoped-pg/pool.ts`. That module is module-private — the eslint boundary
  * names it and `npm run boundaries` resolves it through the TypeScript module
  * resolver — and `releaseProductionPools()` already is exactly
  * `resetPrivilegeAssertionCacheForTests()` followed by `closePools()`. Dropping
@@ -72,19 +119,20 @@ import {
   harnessEnv,
   migratorDatabaseUrl,
   ownerQuery,
+  queryRows,
   releaseProductionPools,
   runAsUser,
   workerDatabaseName,
 } from './support/db'
-import { enterIdentityContext } from '../../src/server/session/resolve'
+import { enterIdentityContext } from '../support/scoped-pg/session'
 import {
   ContextMismatchError,
   PrivilegeAssertionError,
   RowCountError,
   StatesmanError,
   withUser,
-} from '../../src/server/db'
-import type { UserScopedClient } from '../../src/server/db'
+} from '../support/scoped-pg'
+import type { UserScopedClient } from '../support/scoped-pg'
 import { backendPid, seedUser } from './support/race'
 
 // ---------------------------------------------------------------------------
@@ -109,18 +157,21 @@ const B_DRAFT_1 = 'dddddddd-0000-0000-0000-0000000b9d0b'
 const A_DRAFT_COUNT = 2
 
 /**
- * The identity the impostor `app.require_user_id()` returns.
+ * The identity the impostor `auth.uid()` returns.
  *
  * It MUST be a valid 8-4-4-4-12 hex uuid. `beginScopedTransaction` parses the
- * probe's result with `z.guid()` before comparing it, so a malformed value would
- * produce the "unexpected shape" `ContextMismatchError` instead of the
- * "does not agree with the identity just set" one — a different branch, and the
- * weaker of the two claims.
+ * probe's result with `z.guid()` — NOT `z.uuid()` (V33) — before comparing it, so
+ * a malformed value would produce the "did not return a usable uuid"
+ * `ContextMismatchError` instead of the "does not agree with the identity just
+ * set" one. Those are different branches and the first is the weaker claim: it
+ * fires for a NULL identity too, which is the condition that is easy to reach by
+ * accident. This instrument must drive the SPECIFIC branch that catches an
+ * identity which resolved successfully to the wrong user.
  */
 const IMPOSTOR_USER_ID = '00000000-0000-0000-0000-0000000f00d5'
 
-/** The name the real function is parked under while the impostor is installed. */
-const SHADOWED_NAME = 'require_user_id_shadowed'
+/** The name the real `auth.uid()` is parked under while the impostor is installed. */
+const SHADOWED_NAME = 'uid_shadowed'
 
 // ---------------------------------------------------------------------------
 // Literal SQL.
@@ -137,8 +188,27 @@ const SHADOWED_NAME = 'require_user_id_shadowed'
 const INSERT_DECISION =
   'insert into public.decision (id, user_id, draft_payload) values ($1::uuid, $2::uuid, $3::jsonb)'
 const UPDATE_ONE_DRAFT = 'update public.decision set draft_payload = $1::jsonb where id = $2::uuid'
+/**
+ * `app.require_user_id()` and not `auth.uid()`, deliberately.
+ *
+ * 20261021140100 keeps the raising wrapper and grants EXECUTE on it to
+ * `authenticated` (MEASURED: `grant execute on function app.require_user_id() to
+ * authenticated`), and it is the one accessor that still fails loudly. If the
+ * claim were missing this statement raises `28000` instead of matching
+ * `user_id = NULL` and updating zero rows — and a zero-row update is precisely
+ * what the M7 leg below is asserting about, so the two must not be confusable.
+ * A policy predicate may not do this (ADR-0015: a raising policy would give the
+ * local target a failure mode the live one lacks); a test statement may.
+ */
 const UPDATE_ALL_MY_DRAFTS =
   'update public.decision set draft_payload = $1::jsonb where user_id = app.require_user_id()'
+// unscoped-count-ok: this count is taken THROUGH RLS as `authenticated` with a claim,
+// so the policy `user_id = auth.uid()` is the scoping predicate and the result is
+// per-user by construction rather than whole-table. The assertion it feeds
+// (`owned === A_DRAFT_COUNT`) is about USER_A, whose ids are unique to this file, so a
+// sibling file's rows in the shared worker clone cannot move it. The marker is explicit
+// rather than relying on the detector's 200-character window happening to catch the
+// `where id = $1` of the next constant.
 const COUNT_MY_DECISIONS = 'select count(*)::int as n from public.decision'
 const READ_PAYLOAD = 'select draft_payload::text as payload from public.decision where id = $1::uuid'
 
@@ -169,13 +239,16 @@ const NEVER_SET_MARKER = '(never set)'
  * placeholder GUC that was never present in `postgresql.conf` has '' as that
  * reset value, so the name survives the discard carrying no value.
  *
- * This is worth recording rather than smoothing over, because it is exactly the
- * case migration 0001 wrote `app.require_user_id()` for: after a discard,
- * `app.current_user_id` is '' and not NULL, and an accessor that tested only
- * `is null` would hand the policy `''::uuid`. The real accessor tests
- * `v is null or v = ''`, which is why `absent` below is asserted alongside the
- * raw value — that boolean is the same predicate, and it is the claim that does
- * not depend on which of the two renderings a given server produces.
+ * This is worth recording rather than smoothing over, because the port did NOT
+ * remove the hazard, it moved it: `auth.uid()` is
+ * `coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''),
+ * nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid`
+ * (scripts/emulate-supabase.sh, Supabase's published definition). After a discard
+ * the claim GUC reads '' and not NULL, so an accessor that tested only `is null`
+ * would hand the policy `''::uuid`. The real accessor's `nullif(…, '')` is what
+ * closes that, which is why `absent` below is asserted alongside the raw value —
+ * that boolean is byte-for-byte the accessor's own predicate, and it is the claim
+ * that does not depend on which of the two renderings a given server produces.
  */
 const CLEARED_VALUE = ''
 
@@ -183,8 +256,8 @@ const CLEARED_VALUE = ''
  * Both probes in one row, plus the absence predicate the real accessor uses.
  *
  * `absent` is `nullif(current_setting(...), '') is null` — byte-for-byte the
- * condition `app.require_user_id()` applies to `app.current_user_id`. Asserting
- * it makes the control independent of whether the discard leaves NULL or ''.
+ * condition `auth.uid()` applies to `request.jwt.claim.sub`. Asserting it makes
+ * the control independent of whether the discard leaves NULL or ''.
  */
 const READ_LEAK_PROBES =
   `select coalesce(current_setting('${LEAK_GUC}', true), '${NEVER_SET_MARKER}') as guc, ` +
@@ -274,12 +347,40 @@ function urlForRole(role: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// The M2 instrument: swap app.require_user_id() by RENAME
+// The M2 instrument: swap auth.uid() by RENAME
 // ---------------------------------------------------------------------------
 
 /**
- * Park the real `app.require_user_id()` under another name and install an
- * impostor that returns a FIXED, DIFFERENT uuid.
+ * Run DDL as the CLUSTER SUPERUSER against this worker's clone.
+ *
+ * `ownerQuery` connects as `postgres`, which cannot touch schema `auth` — it is
+ * platform-owned (port finding P9), and that refusal is a property the project
+ * wants to keep, because it means nothing in `supabase/migrations/` can weaken
+ * the identity accessor. The swap therefore needs the one role that does own the
+ * emulated `auth` schema. MEASURED on this cluster: `auth` and `auth.uid()` are
+ * both owned by `TEST_ADMIN_ROLE`.
+ *
+ * This is the same concession the posture suite's `auth.uid()`-volatility probe
+ * (port verification leg E4) already takes, and it is confined to DDL on the
+ * instrument: no data read in this file goes through this connection.
+ */
+async function adminQuery(sql: string): Promise<string[][]> {
+  await ensureWorkerDatabase()
+  return queryRows(sql, { db: workerDatabaseName() })
+}
+
+/**
+ * Park the real `auth.uid()` under another name and install an impostor that
+ * returns a FIXED, DIFFERENT uuid.
+ *
+ * `auth.uid()` AND NOT `app.require_user_id()`, which is what this instrument
+ * used to swap. The harness's transaction preamble now reads `auth.uid()`
+ * directly (`IDENTITY_PROBE_SQL` in tests/support/scoped-pg/scoped.ts), because
+ * that is the accessor the POLICIES consult; probing the raising wrapper would
+ * measure the wrapper. So a rename of `app.require_user_id()` no longer reaches
+ * the probe at all, and the pre-port version of this test failed with "expected
+ * the call to reject, but it resolved" — a mutation that stopped biting because
+ * its target moved, which is exactly the shape this file exists to catch.
  *
  * Rename rather than `create or replace` for two reasons. First, the tenancy
  * policies on `decision` and `decision_revision` bind the function by OID, so a
@@ -289,20 +390,27 @@ function urlForRole(role: string): string {
  * still there, under a different name.
  *
  * The impostor is `stable` and takes no arguments, matching the real function's
- * volatility so the planner treats the call the same way.
+ * volatility (MEASURED: `pg_proc.provolatile = 's'`) so the planner treats the
+ * call the same way — and so posture rule 6, which fails a `auth.uid()` made
+ * IMMUTABLE, would not be the thing that caught this.
+ *
+ * The EXECUTE grants mirror scripts/emulate-supabase.sh exactly, including the
+ * `revoke … from public` that V2/V30 require and the grant to `postgres` without
+ * which a SECURITY DEFINER lifecycle body fails with "permission denied for
+ * function uid" (port finding P7).
  */
-async function installImpostorRequireUserId(): Promise<void> {
-  await ownerQuery(
-    `alter function app.require_user_id() rename to ${SHADOWED_NAME};
-     create function app.require_user_id() returns uuid
+async function installImpostorAuthUid(): Promise<void> {
+  await adminQuery(
+    `alter function auth.uid() rename to ${SHADOWED_NAME};
+     create function auth.uid() returns uuid
        language sql stable set search_path = pg_catalog
        as 'select ''${IMPOSTOR_USER_ID}''::uuid';
-     revoke execute on function app.require_user_id() from public;
-     grant execute on function app.require_user_id() to statesman_app;`,
+     revoke execute on function auth.uid() from public;
+     grant execute on function auth.uid() to postgres, anon, authenticated, service_role;`,
   )
 }
 
-async function restoreRealRequireUserId(): Promise<void> {
+async function restoreRealAuthUid(): Promise<void> {
   // Retried once, then VERIFIED.
   //
   // Observed once across the mutation runs for this file: the swap took 345ms
@@ -319,9 +427,9 @@ async function restoreRealRequireUserId(): Promise<void> {
   let lastError: unknown
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      await ownerQuery(
-        `drop function if exists app.require_user_id();
-         alter function app.${SHADOWED_NAME}() rename to require_user_id;`,
+      await adminQuery(
+        `drop function if exists auth.uid();
+         alter function auth.${SHADOWED_NAME}() rename to uid;`,
       )
       lastError = undefined
       break
@@ -333,9 +441,10 @@ async function restoreRealRequireUserId(): Promise<void> {
   // throw", because this is the one failure that must never be silent.
   if (await impostorIsInstalled()) {
     throw new Error(
-      `app.${SHADOWED_NAME}() still exists, so the impostor app.require_user_id() is ` +
-        'STILL INSTALLED. Every later test in this worker would run against a forged ' +
-        `identity function. Last restore error: ${String(lastError)}`,
+      `auth.${SHADOWED_NAME}() still exists, so the impostor auth.uid() is STILL ` +
+        'INSTALLED. Every later test in this worker — and every tenancy, forgery and ' +
+        'lifecycle assertion in every later FILE in this worker — would run against a ' +
+        `forged identity accessor. Last restore error: ${String(lastError)}`,
       { cause: lastError },
     )
   }
@@ -345,22 +454,50 @@ async function restoreRealRequireUserId(): Promise<void> {
 async function impostorIsInstalled(): Promise<boolean> {
   const rows = await ownerQuery(
     `select count(*)::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-      where n.nspname = 'app' and p.proname = '${SHADOWED_NAME}';`,
+      where n.nspname = 'auth' and p.proname = '${SHADOWED_NAME}';`,
   )
   return rows[0]?.[0] === '1'
 }
 
-/** What `app.require_user_id()` currently returns, read as the owner. */
-async function requireUserIdReturnsForOwner(): Promise<string> {
+/**
+ * What `auth.uid()` resolves to when USER_A's claim is set, read as the owner.
+ *
+ * TWO-SIDED BY CONSTRUCTION. With the real accessor installed this returns
+ * USER_A, because that is the claim the script sets; with the impostor installed
+ * it returns IMPOSTOR_USER_ID regardless of the claim. So a single reading
+ * distinguishes "the swap took" from "the swap did not take", rather than merely
+ * reporting a constant that would look the same either way.
+ *
+ * The claim is set with `set_config(…, true)` INSIDE an explicit transaction.
+ * MEASURED repeatedly on this project: a `SET LOCAL` issued outside a transaction
+ * block is scoped to that single statement and the next one reads the empty
+ * string — which would make `auth.uid()` NULL, and a NULL here would be read as
+ * "the swap did not take" when in fact the instrument was never armed.
+ */
+async function authUidWithClaimForOwner(claim: string): Promise<string> {
   const rows = await ownerQuery(
     `begin;
-     select set_config('app.current_user_id', '${IMPOSTOR_USER_ID}', true);
-     select 'v', app.require_user_id()::text;
+     select set_config('request.jwt.claim.sub', :'claim', true);
+     select set_config('request.jwt.claims', '', true);
+     select 'guc', coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), '');
+     select 'v', coalesce(auth.uid()::text, '');
      rollback;`,
+    { claim },
   )
+  const guc = rows.find((r) => r[0] === 'guc')?.[1]
+  if (guc !== claim) {
+    throw new Error(
+      `the claim GUC read back as '${String(guc)}' inside the probe transaction, expected ` +
+        `'${claim}'. The SET LOCAL did not take effect, so this reading says nothing ` +
+        'about whether the accessor was swapped.',
+    )
+  }
   const value = rows.find((r) => r[0] === 'v')?.[1]
-  if (value === undefined) {
-    throw new Error('could not read app.require_user_id() back as the owner')
+  if (value === undefined || value === '') {
+    throw new Error(
+      'auth.uid() came back NULL with the claim demonstrably set, which is neither the ' +
+        'real accessor nor the impostor — the instrument is in an unknown state',
+    )
   }
   return value
 }
@@ -374,9 +511,13 @@ beforeAll(async () => {
   // promise, so there is no path to the database that skips it (canon §8.3).
   await ensureWorkerDatabase()
 
-  // `app_user` has no grants to statesman_app at all (§4.6) and the migrator is
-  // `noinherit`, so the owner seeds it. Through the same path migration 0006
-  // uses for its sentinel.
+  // PORTED (ADR-0015): `public.app_user` is retired and `seedUser` now writes
+  // `auth.users` then `public.profile`, in that order, because `profile.user_id`
+  // carries a real FK to `auth.users(id)`. It still goes through the owner
+  // connection rather than `withUser`, but for a DIFFERENT reason than before:
+  // not grant-absence on `app_user`, but because `auth.users` belongs to the
+  // platform and `authenticated` holds nothing on it at all (MEASURED:
+  // `revoke all on table auth.users from public, anon, authenticated`).
   await seedUser(USER_A)
   await seedUser(USER_B)
 
@@ -406,12 +547,19 @@ beforeAll(async () => {
  * runs files in a worker sequentially, so this `afterAll` is the right seam.
  *
  * Shape notes:
- *   - the owner is subject to the tenancy policy under FORCE (V8), so the delete
- *     is bracketed the way migration 0006 brackets its seed, and the re-FORCE is
- *     asserted from the catalog afterwards — leaving FORCE off would make every
- *     later assertion in this worker vacuous.
- *   - `decision` is deleted before `app_user`, because `decision.user_id` is
- *     `on delete restrict`.
+ *   - the FORCE bracket is now BELT AND BRACES rather than load-bearing, and
+ *     saying so is the honest version. Pre-port the fixture role merely OWNED the
+ *     tables, so it was subject to its own policy under FORCE (V8) and the
+ *     bracket was required for the DELETE to affect anything. Post-port
+ *     `ownerQuery` connects as `postgres`, which is BYPASSRLS — MEASURED on the
+ *     built template: as `postgres`, with FORCE on and no claim set,
+ *     `select count(*) from public.decision` returns the sentinel row and raises
+ *     nothing. The bracket is kept because the re-FORCE assertion below is cheap
+ *     and because a fixture role that ever becomes a merely-owning role would
+ *     silently no-op (V8) without it.
+ *   - `decision` is deleted before `public.profile`, because `decision.user_id`
+ *     is `on delete restrict` (canon §5.2: erasure is a deliberate path, never a
+ *     cascade).
  *   - `decision_revision` is `on delete cascade` from `decision` AND carries
  *     append-only triggers that fire for the owner too (V32). This file creates
  *     no revisions, so the cascade touches zero rows and the FOR EACH ROW
@@ -422,12 +570,29 @@ async function removeFixtureRows(): Promise<void> {
   const rows = await ownerQuery(
     `alter table public.decision no force row level security;
      delete from public.decision where user_id in (:'a'::uuid, :'b'::uuid);
+     -- Scoped only. The whole-table leg that used to sit here measured which sibling
+     -- files had run first in this worker, not what this file left behind
+     -- (vitest.integration.config.ts shares one clone per worker, V35). The source gate
+     -- tests/unit/no-unscoped-counts.test.ts caught it, which is the gate working.
      select 'left',
             (select count(*)::text from public.decision
-              where user_id in (:'a'::uuid, :'b'::uuid)),
-            (select count(*)::text from public.decision);
+              where user_id in (:'a'::uuid, :'b'::uuid));
      alter table public.decision force row level security;
-     delete from public.app_user where id in (:'a'::uuid, :'b'::uuid);
+     -- PORTED (ADR-0015): public.app_user is retired. The identity now lives in
+     -- public.profile with a REAL foreign key to auth.users(id) ON DELETE RESTRICT, so
+     -- the order below is load-bearing in a way the single DELETE was not: revisions,
+     -- then decisions, then the profile, then the auth row. RESTRICT means a profile
+     -- still holding decisions refuses to go, which is canon 5.2 working as intended —
+     -- erasure is a deliberate path, never a cascade.
+     delete from public.profile where user_id in (:'a'::uuid, :'b'::uuid);
+     -- The auth.users row is deliberately NOT deleted. scripts/emulate-supabase.sh grants
+     -- the postgres role only SELECT, INSERT and REFERENCES on auth.users, withholding
+     -- UPDATE and
+     -- DELETE on purpose (port finding P8): GoTrue owns identities, and a harness that
+     -- deleted one would be editing another system's table — on the live project it would
+     -- be deleting a real account. MEASURED: the DELETE fails with 42501, which is the
+     -- emulation refusing exactly as the deployed target would. The profile row is ours
+     -- and is removed; the worker database is dropped at teardown anyway.
      select 'forced', c.relrowsecurity::text, c.relforcerowsecurity::text
        from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where n.nspname = 'public' and c.relname = 'decision';`,
@@ -442,29 +607,23 @@ async function removeFixtureRows(): Promise<void> {
   if (left[1] !== '0') {
     throw new Error(`fixture cleanup left ${String(left[1])} of this file's decision rows behind`)
   }
-  // The TOTAL count is reported, NOT asserted — deliberately.
+  // THE TOTAL COUNT IS NOT MEASURED AT ALL, and the block that used to report it
+  // has been REMOVED rather than re-pointed.
   //
-  // `state-machine.test.ts` requires `public.decision` to hold only the sentinel,
-  // so it is tempting to assert that here. But this file does not own the total:
-  // other files in this worker seed decision rows too, and whether they have run
-  // yet depends on a file-to-worker assignment that changes with the number of
-  // test files. Asserting the total would fail THIS file for another file's
-  // leftovers — the same misattribution the tripwire above exists to prevent, and
-  // the reason the guards in this suite went unnoticed for so long.
+  // It was already dead, and worse than dead. The whole-table leg was deleted
+  // from the SQL above when V35's source gate (tests/unit/no-unscoped-counts.test.ts)
+  // caught it, so the 'left' row carries two columns; the reader that survived
+  // tested `left[2] !== '1'` against `undefined`, which is ALWAYS true, and then
+  // printed `Number(undefined) - 1` — so every single run emitted a warning
+  // claiming "NaN stray rows left by another test file". A diagnostic that fires
+  // unconditionally and reports NaN trains the reader to ignore the warning
+  // channel, which is how a real stray would have gone unnoticed.
   //
-  // So the hard assertion above covers exactly what this file is responsible
-  // for — its own rows — and the total is surfaced as a diagnostic that names
-  // the condition and whose fault it is not.
-  if (left[2] !== '1') {
-    const strays = Number(left[2]) - 1
-    console.warn(
-      `[boundary-guards] this file's own rows are gone, but public.decision still holds ` +
-        `${String(left[2])} rows: the sentinel plus ${String(strays)} row(s) left by ` +
-        'ANOTHER test file in this worker. Not this file. A total-row assertion elsewhere ' +
-        '(state-machine.test.ts) will fail or pass depending on file order, which is a ' +
-        'real defect in whichever file seeded them without cleaning up.',
-    )
-  }
+  // Nothing replaces it: this file does not own the total. Other files in this
+  // worker seed decision rows too, and whether they have run yet depends on a
+  // file-to-worker assignment that changes with the number of test files, so any
+  // claim about the total would fail THIS file for another file's leftovers.
+  // The hard assertion above covers exactly what this file is responsible for.
   if (forced[1] !== 'true' || forced[2] !== 'true') {
     throw new Error(
       `the FORCE bracket did not close: relrowsecurity=${String(forced[1])} ` +
@@ -476,8 +635,8 @@ async function removeFixtureRows(): Promise<void> {
 
 afterAll(async () => {
   // Safety net. If a test threw between the swap and its restore, the next file
-  // in this worker would otherwise run against an impostor identity function.
-  if (await impostorIsInstalled()) await restoreRealRequireUserId()
+  // in this worker would otherwise run against an impostor identity accessor.
+  if (await impostorIsInstalled()) await restoreRealAuthUid()
   await removeFixtureRows()
   process.env['APP_DATABASE_URL'] = appDatabaseUrl()
   await releaseProductionPools()
@@ -497,18 +656,28 @@ afterAll(async () => {
 beforeEach(async () => {
   if (await impostorIsInstalled()) {
     throw new Error(
-      `app.${SHADOWED_NAME}() exists, so a previous test left the impostor ` +
-        'app.require_user_id() installed. Refusing to run: every assertion in this file ' +
-        'would be measuring a forged identity function, not the guard it names.',
+      `auth.${SHADOWED_NAME}() exists, so a previous test left the impostor auth.uid() ` +
+        'installed. Refusing to run: every assertion in this file would be measuring a ' +
+        'forged identity accessor, not the guard it names.',
     )
   }
 })
 
 // ===========================================================================
-// M2 — the eager `select app.require_user_id()` in withUser
+// M2 — the eager identity probe in beginScopedTransaction
+//
+// GUARDS TEST INFRASTRUCTURE, NOT THE PRODUCT. The probe lives in
+// tests/support/scoped-pg/scoped.ts, which ADR-0015 retired from the request
+// path; nothing that ships calls it. Decision: KEPT (option (a)), re-pointed at
+// the harness, because `runAsUser` is how every data assertion in this suite
+// acquires an identity, and post-port a lost identity does not raise `28000` any
+// more — `auth.uid()` returns NULL, every protected table returns 0 rows, and
+// the whole suite goes green against nobody. This probe is the one place the
+// project still permits the fail-loud property, so it is the one place that can
+// be controlled.
 // ===========================================================================
-describe('boundary guard M2: withUser verifies the identity it just set', () => {
-  it('positive control: with the real app.require_user_id(), withUser resolves and the callback runs', async () => {
+describe('harness guard M2 (test infrastructure): the scoped transaction verifies the identity it just set', () => {
+  it('positive control: with the real auth.uid(), withUser resolves and the callback runs', async () => {
     let ran = false
     const seen = await runAsUser(USER_A, (db) => {
       ran = true
@@ -518,12 +687,12 @@ describe('boundary guard M2: withUser verifies the identity it just set', () => 
     expect(seen).toBe(USER_A)
   })
 
-  it('rejects with ContextMismatchError when app.require_user_id() disagrees, and the callback never runs', async () => {
-    // The preamble resolves `app.require_user_id()` by NAME at parse time, so
-    // the pools are closed around the swap: a reused backend cannot be carrying
-    // a cached plan for the previous object.
+  it('rejects with ContextMismatchError when auth.uid() disagrees with the claim just set, and the callback never runs', async () => {
+    // The preamble resolves `auth.uid()` by NAME at parse time, so the pools are
+    // closed around the swap: a reused backend cannot be carrying a cached plan
+    // for the previous object.
     await releaseProductionPools()
-    await installImpostorRequireUserId()
+    await installImpostorAuthUid()
 
     let ran = false
     let error: StatesmanError | undefined
@@ -531,8 +700,11 @@ describe('boundary guard M2: withUser verifies the identity it just set', () => 
     try {
       // INSTRUMENT VALIDATION, first: if the swap did not take, the rejection
       // below would have to come from somewhere else, and this test would be
-      // asserting a coincidence.
-      impostorValue = await requireUserIdReturnsForOwner()
+      // asserting a coincidence. The helper sets USER_A's claim, so the real
+      // accessor would answer USER_A here and only the impostor can answer
+      // IMPOSTOR_USER_ID — the reading tells the two states apart rather than
+      // returning a constant.
+      impostorValue = await authUidWithClaimForOwner(USER_A)
 
       error = await rejectionOf(() =>
         runAsUser(USER_A, () => {
@@ -542,11 +714,11 @@ describe('boundary guard M2: withUser verifies the identity it just set', () => 
       )
     } finally {
       await releaseProductionPools()
-      await restoreRealRequireUserId()
+      await restoreRealAuthUid()
     }
 
     // The swap really was in place, and it really did return the other identity
-    // even with the correct one set in `app.current_user_id`.
+    // even with the correct one set in `request.jwt.claim.sub`.
     expect(impostorValue).toBe(IMPOSTOR_USER_ID)
     expect(impostorValue).not.toBe(USER_A)
 
@@ -555,7 +727,14 @@ describe('boundary guard M2: withUser verifies the identity it just set', () => 
     // boundary could not confirm.
     expect(error).toBeInstanceOf(ContextMismatchError)
     expect(error?.kind).toBe('context_mismatch')
+    // WHICH BRANCH, asserted. `beginScopedTransaction` has three rejection
+    // branches and only one of them is this test's claim: "the probe did not
+    // return a usable uuid" fires for a NULL identity, and "the claim GUC holds
+    // X but Y was just set" fires when the SET LOCAL did nothing. Both would be
+    // satisfied by a broken instrument. The message below is the branch that
+    // only a successfully-resolved WRONG identity can reach.
     expect(error?.message).toContain('does not agree with the identity just set')
+    expect(error?.message).toContain('auth.uid()')
     expect(ran).toBe(false)
 
     // And the restore landed: the same call that failed a moment ago succeeds
@@ -566,8 +745,55 @@ describe('boundary guard M2: withUser verifies the identity it just set', () => 
 
 // ===========================================================================
 // M3 — assertUnprivilegedOnce()
+//
+// GUARDS TEST INFRASTRUCTURE, NOT THE PRODUCT. ADR-0015 §6.1 says in as many
+// words that `assertUnprivilegedOnce()` "has nothing to act on" once there is no
+// server pool, and the module that holds it is headed "TEST-ONLY … no production
+// role". Decision: KEPT (option (a)), re-pointed, because the harness DOES have
+// a pool and ADR-0015's "the trap this introduces" is about exactly this: a
+// connection as `postgres` passes every tenancy, cross-user and forgery
+// assertion while enforcing nothing. `assertTestConnectionIdentity()` guards the
+// psql seam; this guards the `pg` seam. Two seams, two controls.
+//
+// THE PRODUCTION PROPERTY IS GONE and is NOT replaced by anything here. What
+// survives in shipped form is posture rules 11 (BYPASSRLS) and 12 (broad
+// grants), which ask which privileged roles may EXIST, plus the harness role
+// guard (mutation M22). Those are different questions from "is THIS connection
+// privileged", and the shipped answer to that question is now "there is no
+// connection".
+//
+// REWORKED, NOT RENAMED. The pre-port version refused `statesman_migrator` and
+// asserted the message named `statesman_migrator` and `statesman_owner`. Both
+// roles are retired, so a substitution would have produced a test that passes
+// while asserting nothing about the thing that is actually dangerous. The legs
+// below target the PROPERTY instead — bypassrls, ownership, and membership via
+// `pg_has_role(…, 'MEMBER')` (V3) — and the roles are chosen because they hold
+// those properties on a Supabase-shaped target, not because of their names.
 // ===========================================================================
-describe('boundary guard M3: withUser refuses a privileged connection', () => {
+
+/**
+ * The emulation's analogue of the retired `statesman_migrator` → `statesman_owner`
+ * escalation, and it is an analogue by PROPERTY rather than by position.
+ *
+ * MEASURED on this cluster with the same predicate the guard uses:
+ *
+ *   authenticator  rolsuper=f  rolbypassrls=f  owns 0  reachable: service_role [BYPASSRLS]
+ *   postgres       rolsuper=f  rolbypassrls=t  owns 11 reachable: service_role [BYPASSRLS]
+ *   authenticated  rolsuper=f  rolbypassrls=f  owns 0  reachable: (none)
+ *
+ * `authenticator` is the role PostgREST itself logs in as before switching to
+ * `anon` or `authenticated`; scripts/emulate-supabase.sh creates it NOINHERIT
+ * holding all three client roles, which is Supabase's own shape. It is therefore
+ * the post-port role for which an attribute-only predicate reports "clean" while
+ * `SET ROLE service_role` succeeds — V3 exactly, in the costume the platform
+ * supplies.
+ */
+const MEMBERSHIP_PRIVILEGED_ROLE = 'authenticator'
+
+/** The BYPASSRLS role it can reach. Asserted in the message, not assumed. */
+const REACHED_BYPASSRLS_ROLE = 'service_role'
+
+describe('harness guard M3 (test infrastructure): withUser refuses a privileged connection', () => {
   afterEach(async () => {
     // Every test in here repoints APP_DATABASE_URL and closes the pools. Put the
     // worker's own URL back and drop the cached verdict, which is keyed to
@@ -577,13 +803,13 @@ describe('boundary guard M3: withUser refuses a privileged connection', () => {
     await releaseProductionPools()
   })
 
-  it('positive control: the statesman_app connection is ACCEPTED and the callback runs', async () => {
+  it('positive control: the `authenticated` connection is ACCEPTED and the callback runs', async () => {
     const { ran, error } = await withUserAgainst(appDatabaseUrl())
     expect(error).toBeUndefined()
     expect(ran).toBe(true)
   })
 
-  it('refuses statesman_migrator, which a rolsuper/rolbypassrls-only predicate would pass', async () => {
+  it("refuses `postgres` — rolsuper is FALSE, so a superuser-only predicate would admit the one role on the platform that ignores every policy", async () => {
     const { ran, error } = await withUserAgainst(migratorDatabaseUrl())
 
     expect(error).toBeInstanceOf(PrivilegeAssertionError)
@@ -593,19 +819,49 @@ describe('boundary guard M3: withUser refuses a privileged connection', () => {
     // The role it refused, read back from the connection rather than assumed:
     // pg_hba is `trust` locally, so this URL connected with no password error
     // (V1) — which is the failure mode the guard exists for.
-    expect(message).toContain('statesman_migrator')
+    expect(message).toContain('postgres')
     expect(message).toContain(workerDatabaseName())
 
-    // THE POINT OF THIS TEST. statesman_migrator is neither a SUPERUSER nor
-    // BYPASSRLS; it is privileged because it is a MEMBER of statesman_owner,
-    // which OWNS all six public relations, and ownership bypasses RLS (V4).
-    // So the violation reported must be the SET ROLE reachability one, and the
-    // two attribute clauses must be silent — otherwise the catch came from a
-    // predicate that would have missed this role.
-    expect(message).toContain('SET ROLE')
-    expect(message).toContain('statesman_owner')
+    // THE POINT OF THIS LEG, and it is the trap ADR-0015 names. Supabase's
+    // `postgres` has `rolsuper = FALSE` and `rolbypassrls = TRUE`, so it READS
+    // as a restricted role, and it is the role the CLI and the dashboard SQL
+    // editor use by default — i.e. the role a typo in the URL lands on. The
+    // violation reported must be the BYPASSRLS one, and the SUPERUSER clause
+    // must be SILENT: if the catch came from `rolsuper` it came from a predicate
+    // that would have missed this role entirely.
+    expect(message).toContain('has BYPASSRLS')
     expect(message).not.toContain('is a SUPERUSER')
-    expect(message).not.toContain('has BYPASSRLS')
+
+    // And the second, independent reason: it owns relations in `public`.
+    // Ownership bypasses RLS with no role attribute set at all (V4), so this is
+    // not a restatement of the clause above. MEASURED: 11 relations.
+    expect(message).toMatch(/owns [1-9][0-9]* relation\(s\) in schema public/)
+  })
+
+  it(`refuses \`${MEMBERSHIP_PRIVILEGED_ROLE}\`, which an ATTRIBUTE-ONLY predicate would pass: rolsuper and rolbypassrls are both false and it owns nothing, but SET ROLE reaches a BYPASSRLS role (V3)`, async () => {
+    const { ran, error } = await withUserAgainst(urlForRole(MEMBERSHIP_PRIVILEGED_ROLE))
+
+    expect(error).toBeInstanceOf(PrivilegeAssertionError)
+    expect(ran).toBe(false)
+    const message = (error as PrivilegeAssertionError).message
+
+    expect(message).toContain(MEMBERSHIP_PRIVILEGED_ROLE)
+    expect(message).toContain(workerDatabaseName())
+
+    // THE POINT OF THIS LEG. Role attributes are NOT inherited, but `SET ROLE`
+    // still works, so a guard built only on `rolsuper`/`rolbypassrls`/ownership
+    // reports this connection clean while it can become `service_role`, which is
+    // BYPASSRLS. The reachability clause must be the one that fired AND the three
+    // attribute clauses must all be silent — that asymmetry is what distinguishes
+    // "the membership predicate caught it" from "something else happened to".
+    expect(message).toContain('SET ROLE')
+    expect(message).toContain(REACHED_BYPASSRLS_ROLE)
+    // The reason code is reported alongside the role name, so the test can assert
+    // WHICH predicate matched rather than merely that a name appeared.
+    expect(message).toContain(`${REACHED_BYPASSRLS_ROLE} [BYPASSRLS]`)
+    expect(message).not.toContain('is a SUPERUSER')
+    expect(message).not.toContain('the role has BYPASSRLS')
+    expect(message).not.toContain('relation(s) in schema public')
   })
 
   it('refuses the cluster superuser, naming the SUPERUSER attribute', async () => {
@@ -642,9 +898,25 @@ describe('boundary guard M3: withUser refuses a privileged connection', () => {
 })
 
 // ===========================================================================
-// M4 — DISCARD ALL. Canon §7.6: pooled-identity leak is a RELEASE BLOCKER.
+// M4 — DISCARD ALL.
+//
+// GUARDS TEST INFRASTRUCTURE, NOT THE PRODUCT. Canon §7.6 called pooled-identity
+// leak a RELEASE BLOCKER for the Node request path, and ADR-0015 retired that
+// path: a browser holding a publishable key has no pool to leak through, and
+// PostgREST's own connection handling is outside this repository (and outside the
+// emulation — docs/supabase-port-notes.md §3 lists the pooler as NOT reproduced).
+// Decision: KEPT (option (a)), re-pointed at the harness.
+//
+// WHY IT IS STILL WORTH GATING HERE. `isolate: false` means one worker process
+// runs many test files against one clone through one pool, so the SAME backend
+// serves tenancy, forgery and lifecycle assertions in sequence. A session-level
+// `request.jwt.claim.sub` surviving one `runAsUser` would give the next
+// CLAIMLESS read an identity — and a claimless read that returns rows instead of
+// zero is precisely the observation tenancy.test.ts's denial legs are built on.
+// Post-port that corruption is silent in the dangerous direction: it turns a
+// denial into a pass.
 // ===========================================================================
-describe('boundary guard M4: DISCARD ALL clears session state before the connection is reused', () => {
+describe('harness guard M4 (test infrastructure): DISCARD ALL clears session state before the pooled connection is reused', () => {
   it('a session GUC and a prepared statement planted in call 1 are GONE in call 2 on the SAME backend, though a plain COMMIT leaves them', async () => {
     // A fresh pool, so the two sequential acquires below can only be served by
     // one client. Nothing here sets pool size — `max` is 10 — so the identical
@@ -713,8 +985,25 @@ describe('boundary guard M4: DISCARD ALL clears session state before the connect
 
 // ===========================================================================
 // M7 — queryAffectingOne's rowCount assertion
+//
+// GUARDS TEST INFRASTRUCTURE, NOT THE PRODUCT. `queryAffectingOne` is a method on
+// the harness's scoped client; no shipped code calls it, because no shipped code
+// opens a `pg` connection. Decision: KEPT (option (a)), re-pointed at the
+// harness.
+//
+// WHY IT IS STILL WORTH GATING HERE, and this is the strongest of the four. Every
+// FIXTURE write in this suite goes through `queryAffectingOne` — see this file's
+// own `beforeAll`, race.ts's `createDraftDecision`, tenancy.test.ts's seeds. A
+// fixture INSERT that is silently filtered by a WITH CHECK affects zero rows and
+// raises nothing (V7). Without the row-count assertion the suite would then run
+// its denial tests against an EMPTY protected table — and an empty forced-RLS
+// table does not deny at all: the policy qual is never evaluated, the read
+// returns zero rows and raises nothing, so a correct policy, a broken policy and
+// no policy are three names for the same observation (V18, and the reason
+// posture rule 9 exists). This assertion is what keeps a failed seed from
+// manufacturing a green denial.
 // ===========================================================================
-describe('boundary guard M7: queryAffectingOne asserts exactly one affected row', () => {
+describe('harness guard M7 (test infrastructure): queryAffectingOne asserts exactly one affected row', () => {
   it('positive control: a one-row update RESOLVES, and the write lands', async () => {
     const payload = JSON.stringify({ n: 1, control: 'one-row' })
     await runAsUser(USER_A, async (db) => {

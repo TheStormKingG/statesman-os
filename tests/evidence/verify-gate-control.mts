@@ -3,7 +3,7 @@
 // owner), must be REJECTED. A gate that cannot be made to fail has not been
 // shown to work.
 const { assertUnprivilegedOnce, closePools } = await import(
-  '/Users/stefangravesande/Documents/Projects/Stathos/src/server/db/pool')
+  '/Users/stefangravesande/Documents/Projects/Stathos/tests/support/scoped-pg/pool')
 let outcome = 'ACCEPTED (gate did not fire)'
 try {
   await assertUnprivilegedOnce()

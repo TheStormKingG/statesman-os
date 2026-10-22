@@ -1,0 +1,83 @@
+# M22 — THE HARNESS ROLE GUARD stops rejecting a BYPASSRLS connection.
+#
+# ADR-0015 requires this mutation by name: "The harness guard that was proven fatal in
+# Slice 1 must be rewritten to assert `current_user = 'authenticated'`, `rolbypassrls =
+# false`, zero owned relations in `public`, and a present JWT claim — with its own
+# mutation proving it bites."
+#
+# WHY IT IS THE MOST IMPORTANT ENTRY IN THIS REGISTRY. Supabase's `postgres` role has
+# `rolbypassrls = true` while `rolsuper` is FALSE, so it reads as a restricted role while
+# enforcing nothing, and it is the role the CLI and the dashboard SQL editor use BY
+# DEFAULT. Any test or probe connecting as it passes while enforcing NOTHING — tenancy,
+# cross-user denial and forgery alike. That is V1/V4 in a new costume and it voids a whole
+# suite SILENTLY. Every other mutation in this file is interpreted through a suite whose
+# connection this guard vouches for, so if the guard cannot report a negative, no verdict
+# in the same report means anything.
+#
+# WHY THE MUTATION IS SHAPED THIS WAY, AND NOT AS "POINT THE SUITE AT postgres". The gate
+# applies one mutation to a mirror and runs the suite with the ordinary environment, so the
+# connection stays `authenticated` whatever this guard says. Mutating the guard to ACCEPT a
+# privileged role therefore changes nothing about how the suite connects — it changes only
+# whether the guard can still say NO. That is exactly the property under test, and it is
+# observable because the tenancy suite contains an instrument test that points
+# `assertTestConnectionIdentity()` at a privileged role and requires it to THROW. Delete
+# the BYPASSRLS clause and that instrument stops seeing a negative.
+#
+# MEASURED, BEFORE REGISTRATION (the A/B this mutation formalises). The unmutated guard was
+# pointed at three roles against the built template:
+#   * `authenticated`  -> ACCEPTED: bypassrls=false, owns 0 relations, claim observed,
+#                         auth.uid() NULL without a claim.
+#   * `postgres`       -> ABORTED, naming FIVE independent reasons: wrong current_user,
+#                         BYPASSRLS, 11 owned relations in `public`, `service_role`
+#                         reachable by membership (V3), and TEMPORARY held on the database.
+#   * cluster superuser-> ABORTED, naming SUPERUSER, BYPASSRLS, and membership of
+#                         pg_read_all_data, pg_write_all_data, postgres and service_role.
+# So the guard demonstrably bites on the exact role ADR-0015 warns about. What this
+# mutation adds is the standing proof that it goes on biting.
+#
+# WHY ONE CLAUSE AND NOT THE WHOLE GUARD. Deleting `current_user !== EXPECTED_APP_ROLE` as
+# well would hide which predicate did the catching: `postgres` fails five clauses at once,
+# so a mutation that removed several would still be "caught" by a guard that had lost the
+# BYPASSRLS leg specifically. This removes the ONE clause that is the port's novelty —
+# `rolsuper` is false on Supabase, so BYPASSRLS is the only attribute that catches
+# `postgres` — and leaves the rest standing, which is what makes the verdict attributable.
+#
+# EXPECTATION UNVERIFIED. The gate could not run in the session that registered this: the
+# baseline integration suite is not green, because the data-path suites still address the
+# retired `app.current_user_id` / `statesman_app` shape and their port is unfinished. The
+# gate refuses to interpret any mutation against a red baseline, which is correct. `expect:`
+# is therefore `uncaught` — this registry's honest backlog marker — and NOT a claim that
+# the control is missing: the A/B above was executed and passed. Promote to
+# `expect: caught` only after a green baseline confirms `expect-test` resolves to exactly
+# one test.
+# PROMOTED from `expect: uncaught`. The gate reported it PROMOTABLE: its named
+# catcher now fails when the mutation is applied, so the guard is controlled and
+# the registry should say so. The promotion precondition in the old `todo:` line
+# (a green integration baseline) is met.
+id: M22
+title: the BYPASSRLS clause deleted from the integration harness role guard
+expect: caught
+proves: the harness role guard ABORTS rather than warns for a bypassrls connection (ADR-0015; docs/supabase-target.md 2)
+proves: the clause that catches Supabase's `postgres` is BYPASSRLS, not rolsuper, which is false there
+expect-test: instrument: the test connection is the unprivileged app role, and the guard that says so can report a negative
+
+file: tests/integration/support/db.ts
+count: 1
+@@FIND
+  if (identity.bypassesRls) {
+    failures.push(
+      'connection role has BYPASSRLS — RLS would not be applied at all. On Supabase this ' +
+        'is `postgres`, whose rolsuper is FALSE, so it reads as a restricted role while ' +
+        'enforcing nothing, and it is the role the CLI and the dashboard SQL editor use ' +
+        'by default (ADR-0015; docs/supabase-target.md §2). Tenancy, cross-user denial ' +
+        'and forgery would all pass vacuously.',
+    )
+  }
+@@REPLACE
+  if (identity.bypassesRls) {
+    // M22: the BYPASSRLS failure is deliberately NOT recorded. An empty @@REPLACE
+    // is rejected by the applier ('empty FIND block'), so the block is emptied
+    // rather than deleted: the guard still compiles and still runs, and simply
+    // stops reporting the one violation that matters most.
+  }
+@@END

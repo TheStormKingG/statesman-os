@@ -13,9 +13,9 @@ id: M11
 title: privileged-role's PG_READ_ALL_DATA reason compares rolname to a role that cannot exist
 expect: caught
 proves: the production role guard notices membership of pg_read_all_data, which no attribute check sees
-expect-test: PG_READ_ALL_DATA: refuses a connection with membership of pg_read_all_data
+expect-test: PG_READ_ALL_DATA is its own predicate (V34), reported for pg_read_all_data alone
 
-file: src/server/db/privileged-role.ts
+file: tests/support/scoped-pg/privileged-role.ts
 count: 1
 @@FIND
     sql: (a) => `${a}.rolname = 'pg_read_all_data'`,

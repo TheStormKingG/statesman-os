@@ -18,9 +18,9 @@ id: M13
 title: privileged-role's CREATEROLE reason is ORed with true, so every role matches it
 expect: caught
 proves: the `baseline` test keeps the four reason-code assertions honest — a predicate that matches everything is caught, not just one that matches nothing
-expect-test: baseline: statesman_migrator is refused for OWNERSHIP ONLY
+expect-test: CREATEROLE and CREATEDB are two predicates
 
-file: src/server/db/privileged-role.ts
+file: tests/support/scoped-pg/privileged-role.ts
 count: 1
 @@FIND
     sql: (a) => `${a}.rolcreaterole`,

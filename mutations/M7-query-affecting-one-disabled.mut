@@ -18,7 +18,7 @@ proves: the V7 silence-is-not-success assertion rejects BOTH too few and too man
 expect-test: raises RowCountError when the update affects ZERO rows
 expect-test: raises RowCountError when the update affects MORE than one row
 
-file: src/server/db/scoped.ts
+file: tests/support/scoped-pg/scoped.ts
 count: 1
 @@FIND
     if (result.rowCount !== 1) {

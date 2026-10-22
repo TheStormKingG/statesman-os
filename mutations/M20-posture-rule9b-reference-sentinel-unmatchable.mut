@@ -1,0 +1,46 @@
+# M20 — posture rule 9b (REFERENCE SENTINELS) made unmatchable.
+#
+# THE GAP THIS RULE CLOSED, WHICH IS WHY IT NEEDS ITS OWN CONTROL. The pre-port rule 9
+# SKIPPED any table listed in public.posture_exempt_table, and the pre-port migrations/0008
+# (that set is deleted; it is in git history at commit b3a5f59) used that to waive its five
+# reference tables because their sentinels are keyed by `id`, not `user_id`.
+# The sentinels were seeded and the comment argued at length that the evidence requirement
+# was met — but NOTHING CHECKED THEM. Five protected tables carried an unenforced sentinel:
+# true the day it was written, with nothing to notice when it stopped being true. M8 covers
+# rule 9a only, so without this mutation the half of rule 9 that was added to close that
+# gap would have no control.
+#
+# WHY A SENTINEL IS NOW INDISPENSABLE RATHER THAN THOROUGH. `app.require_user_id()` raised
+# 28000; `auth.uid()` returns NULL. A claimless read of a protected table therefore returns
+# zero rows and raises nothing (MEASURED). On an EMPTY protected table a correct policy, a
+# broken policy and no policy at all are three names for the same observation, so the
+# seeded row is the only thing that turns a zero back into evidence.
+#
+# The mutation makes the "registered, so count it" branch unfailable while leaving the
+# registry, the identifier checks and the `execute format` all in place — so the rule still
+# reads the catalog, still interpolates safely, and still reports nothing.
+#
+# EXPECTATION UNVERIFIED: the gate could not run in the session that registered this (the
+# baseline integration suite is not green). Probes C3 and C4 in docs/supabase-port-notes.md
+# §6 record this rule firing by execution for a deleted reference sentinel and for a
+# registry row naming a nonexistent column, so `uncaught` here is a backlog marker, not a
+# measurement.
+id: M20
+title: posture rule 9b (reference-table sentinel count) made unfailable
+expect: uncaught
+todo: promote to `expect: caught` once the baseline is green. Probes C3/C4 passed by execution; the two named catchers do not yet exist as tests and must be written.
+proves: rule 9b enforces the reference-table sentinels the pre-port rule 9 waived (V18, port notes 4)
+expect-test: [M20] raises ST099 for a reference sentinel deleted
+expect-test: [M20] raises ST099 for a registry row naming a column that does not exist
+
+file: supabase/migrations/20261021140500_verify_security_posture.sql
+count: 1
+@@FIND
+        if n <> 1 then
+          bad := bad || format(
+            E'\n  rule 9b: sentinel rows in %s where %s = %s: %s, expected exactly 1',
+@@REPLACE
+        if false then
+          bad := bad || format(
+            E'\n  rule 9b: sentinel rows in %s where %s = %s: %s, expected exactly 1',
+@@END

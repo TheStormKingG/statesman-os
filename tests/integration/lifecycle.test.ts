@@ -2,7 +2,7 @@
  * The decision lifecycle — integration.
  *
  * Covers the §4.4 / §4.6b invariants end to end against a real cloned database, through
- * the real `withUser` seam (`runAsUser`), as `statesman_app`.
+ * the harness's `withUser` seam (`runAsUser`), as `authenticated` (ADR-0015 §8.3).
  *
  * TAG MAPPING (docs/PRD.md §FR table), stated rather than implied:
  *   FR-03  structured response + draft saving; incomplete drafts reopen without loss
@@ -47,8 +47,8 @@ import {
   appendRevision,
   stampMilestone,
   submitDecision,
-} from '../../src/server/db'
-import type { MilestoneName, RevisionInput, UserScopedClient } from '../../src/server/db'
+} from '../support/scoped-pg'
+import type { MilestoneName, RevisionInput, UserScopedClient } from '../support/scoped-pg'
 import {
   ensureWorkerDatabase,
   ownerQuery,
@@ -125,12 +125,20 @@ const RAW_SUBMIT_SQL = `select revision_id, revision_no, replayed from app.submi
 /**
  * The owner-side append-only probe, as a rolled-back script.
  *
- * `statesman_app` holds no UPDATE or DELETE grant on `decision_revision`, so the app
+ * `authenticated` holds no UPDATE or DELETE grant on `decision_revision`, so the app
  * role is stopped by privilege checking and never reaches the trigger. That leaves the
  * trigger itself unproven from the app role's seat, which matters because the trigger is
- * what V32 says is role-independent. This script runs as the schema owner with the FORCE
- * bracket off — the same bracket `sentinels.ts` and `0006` use — so a candidate row
- * actually reaches `app.forbid_mutation()`.
+ * what V32 says is role-independent. This script runs as `postgres` with the FORCE
+ * bracket off — the same bracket `sentinels.ts` and 20261021140600 use — so a candidate
+ * row actually reaches `app.forbid_mutation()`.
+ *
+ * POST-PORT THE BRACKET IS NO LONGER WHAT MAKES THE ROW REACHABLE, and saying so matters
+ * because the bracket is what the comment below defends. `postgres` is BYPASSRLS, so RLS
+ * does not apply to this connection with or without FORCE (MEASURED: as `postgres`, with
+ * FORCE on and no claim, a read of `public.decision` returns rows and raises nothing).
+ * The trigger, by contrast, is role-independent (V32) and fires regardless — which is
+ * the whole point of this leg. The bracket is kept because a fixture role that ever
+ * becomes a merely-owning role would silently no-op without it (V8).
  *
  * It is safe despite touching RLS: the `alter table` is inside the transaction, so
  * whether the DELETE raises (psql aborts under ON_ERROR_STOP and the session ends, which
@@ -148,9 +156,16 @@ const READ_REVISION_RLS_SQL =
   'from pg_class c join pg_namespace n on n.oid = c.relnamespace ' +
   "where n.nspname = 'public' and c.relname = 'decision_revision'"
 
+// PORTED (ADR-0015): public.app_user is retired. `public.profile.user_id` carries a REAL
+// foreign key to `auth.users (id)`, so an identity fixture creates the auth row first —
+// the chain is decision -> profile -> auth.users. :'hash' is still accepted as a psql
+// variable by every call site and is simply not used: no credential column exists to
+// write it to, which is strictly stronger than storing an unusable encoding.
 const INSERT_APP_USER_SQL =
-  'insert into public.app_user (id, email, password_hash, algo_ver) ' +
-  "values (:'id', :'email', :'hash', 1);"
+  'insert into auth.users (id, email, created_at, updated_at) ' +
+  "values (:'id', :'email', now(), now()) on conflict (id) do nothing; " +
+  'insert into public.profile (user_id, display_name) ' +
+  "values (:'id', :'email') on conflict (user_id) do nothing;"
 
 /**
  * Not a valid argon2 encoding, for the same reason `0006` uses one: no credential can
@@ -219,10 +234,12 @@ async function captureOwnerSqlstate(
  * ------------------------------------------------------------------ */
 
 /**
- * `app_user` carries NO grants to `statesman_app` (§4.6), so a fixture user cannot be
- * created through `withUser` at all; this is the one place the harness's owner seam is
- * the only option. Decisions, by contrast, ARE created through `withUser` (§8.3), so a
- * missing INSERT policy surfaces here instead of being bypassed by the owner.
+ * An identity is created through the owner seam because `auth.users` is the platform's
+ * table and `authenticated` holds nothing on it (port finding P8): the chain is
+ * `decision -> public.profile -> auth.users`, so the auth row must exist first. The
+ * pre-port reason — grant-absence on `app_user` — is retired with the table (ADR-0015).
+ * Decisions, by contrast, ARE created through `withUser` (§8.3), so a missing INSERT
+ * policy surfaces here instead of being bypassed by the owner.
  */
 async function seedUser(): Promise<string> {
   const id = randomUUID()
@@ -322,7 +339,7 @@ describe('decision lifecycle', () => {
   })
 
   // 2 ----------------------------------------------------------------
-  it('[FR-04] statesman_app cannot write a milestone timestamp directly (42501)', async () => {
+  it('[FR-04] `authenticated` cannot write a milestone timestamp directly (42501)', async () => {
     const decisionId = await seedDraft(userA)
 
     const error = await captureRejection(userA, async (db) =>
@@ -332,7 +349,7 @@ describe('decision lifecycle', () => {
     expect(error.kind).toBe('permission_denied')
 
     // POSITIVE CONTROL. Same role, same row, same statement shape — only the COLUMN
-    // differs. `statesman_app` holds UPDATE (draft_payload) and nothing else, so this
+    // differs. `authenticated` holds UPDATE (draft_payload) and nothing else, so this
     // succeeding is what proves the 42501 above is the column grant talking and not an
     // unreachable row, a missing table or a broken connection.
     await runAsUser(userA, async (db) => {
@@ -400,6 +417,93 @@ describe('decision lifecycle', () => {
     expect(revisions[0]?.confidence).toBe(first.confidence)
   })
 
+  /**
+   * [FR-04][FR-14] CROSS-TENANT REPLAY — the control for the leak the Supabase port found.
+   *
+   * WHY THIS TEST EXISTS, because it is not obvious from the assertion alone.
+   *
+   * On the local architecture, `statesman_owner` was `rolbypassrls = false` (V34), so a
+   * SECURITY DEFINER function running as the owner was still subject to FORCE RLS. The
+   * canon said a definer function is "scoped by the same policy that scopes the app role",
+   * and locally that was true, so the idempotency lookup in `app.submit_decision` carried
+   * NO owner predicate: the policy supplied one.
+   *
+   * On Supabase, `postgres` is `rolbypassrls = true`. The second half of that sentence
+   * became FALSE, and the lookup started seeing every user's rows. So user B replaying
+   * user A's idempotency token received A's `revision_id` with `replayed = true` — a
+   * silent, zero-error, cross-tenant disclosure of another person's permanent record.
+   * Fixed by adding `and dr.user_id = me`.
+   *
+   * The mutation registry's M18 covers that fix, and its declared catcher was the
+   * SAME-USER replay test above. That test cannot catch it: for one user, `and
+   * dr.user_id = me` is a no-op, so the mutation leaves it green. A control that cannot
+   * fail for the thing it names is the exact failure this project's mutation gate exists
+   * to surface, and it surfaced here.
+   *
+   * The assertion is therefore the property the predicate protects, stated directly:
+   * **B never learns A's revision_id, by any path.** Not "B gets an error" — the function
+   * is free to reject B for several legitimate reasons, and pinning the test to one of
+   * them would make it fragile without making it stronger.
+   */
+  it('[FR-04][FR-14] a cross-tenant replay never returns the other user\'s revision', async () => {
+    const aDecision = await seedDraft(userA, { title: "user A's decision" })
+    const aInput = revisionInput(aDecision)
+    const aRevision = await runAsUser(userA, async (db) => submitDecision(db, aInput))
+    expect(aRevision.replayed).toBe(false)
+
+    const sharedToken = aInput.idempotencyToken
+    const bDecision = await seedDraft(userB, { title: "user B's decision" })
+
+    // Leg 1: B submits B's OWN draft while reusing A's token. Pre-fix this returned A's
+    // revision_id with replayed=true. Post-fix the owner-scoped probe misses, B proceeds,
+    // and the globally-unique token constraint stops the write.
+    let bSubmitRevisionId: string | undefined
+    const submitError = await captureRejection(userB, async (db) => {
+      const r = await submitDecision(db, revisionInput(bDecision, { idempotencyToken: sharedToken }))
+      bSubmitRevisionId = r.revisionId
+    })
+    expect(
+      bSubmitRevisionId,
+      'user B received a revision_id while replaying user A\'s token — if this equals A\'s, ' +
+        'the owner predicate in app.submit_decision is missing and the leak is back',
+    ).not.toBe(aRevision.revisionId)
+    if (submitError === undefined) {
+      // B was allowed a revision of its own. Acceptable, provided it is B's and not A's.
+      expect(bSubmitRevisionId).toBeDefined()
+    }
+
+    // Leg 2: the same through append_revision, which carried the identical lookup.
+    let bAppendRevisionId: string | undefined
+    await captureRejection(userB, async (db) => {
+      const r = await appendRevision(db, revisionInput(bDecision, { idempotencyToken: sharedToken }))
+      bAppendRevisionId = r.revisionId
+    })
+    expect(
+      bAppendRevisionId,
+      'user B received a revision_id from append_revision while replaying A\'s token',
+    ).not.toBe(aRevision.revisionId)
+
+    // Leg 3: B aims directly at A's decision id. RLS hides A's row from B, so the lock
+    // finds nothing and the function must refuse rather than act on an invisible row.
+    const direct = await captureRejection(userB, async (db) =>
+      submitDecision(db, revisionInput(aDecision, { idempotencyToken: randomUUID() })),
+    )
+    expect(direct, 'B submitting against A\'s decision id must be refused').toBeDefined()
+
+    // POSITIVE CONTROL. Without this the three legs above are satisfied by a function that
+    // refuses everyone, including A, which would "pass" while breaking the product.
+    const aReplay = await runAsUser(userA, async (db) =>
+      submitDecision(db, revisionInput(aDecision, { idempotencyToken: sharedToken })),
+    )
+    expect(aReplay.replayed).toBe(true)
+    expect(aReplay.revisionId).toBe(aRevision.revisionId)
+
+    // And A's record is untouched by anything B did.
+    const aRevisions = await readRevisions(userA, aDecision)
+    expect(aRevisions).toHaveLength(1)
+    expect(aRevisions[0]?.content).toEqual(aInput.content)
+  })
+
   // 5 ----------------------------------------------------------------
   it('[FR-04] a different token against an already-submitted decision raises ST010', async () => {
     const decisionId = await seedDraft(userA)
@@ -465,7 +569,7 @@ describe('decision lifecycle', () => {
     )
     const revisionId = submitResult.revisionId
 
-    // WHICH CODE, AND WHY. `statesman_app` is granted SELECT and INSERT on
+    // WHICH CODE, AND WHY. `authenticated` is granted SELECT and INSERT on
     // decision_revision and nothing else, and Postgres checks privileges BEFORE a
     // BEFORE-ROW trigger can fire. So from this seat the observable code is 42501 from
     // the absent grant — NOT ST001. The trigger is never reached, which is precisely why

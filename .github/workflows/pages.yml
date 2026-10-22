@@ -1,0 +1,318 @@
+# Build the static export and deploy it to GitHub Pages (ADR-0015).
+#
+# ── THE REPOSITORY IS PUBLIC ──────────────────────────────────────────────────
+#
+# Nothing in this file, and nothing any step of it writes into the tree, may
+# contain a credential. A push of a secret to a public repository is not
+# recoverable by deleting the commit: it must be assumed read and rotated.
+# Hence:
+#   - both configuration values arrive through `vars`/`secrets`, never inline;
+#   - no step echoes a key, not even a masked one, and not even on failure;
+#   - the bundle is scanned before deployment for any token that is not the
+#     publishable key it was built with (see `audit-bundle`).
+#
+# ── THE ANON KEY IS NEEDED AT BUILD TIME, AND IS PUBLIC ON PURPOSE ───────────
+#
+# A static export has no server to read an environment variable at request
+# time, so `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are
+# INLINED into the JavaScript during `next build` and are readable by anyone
+# who loads the page. That is Supabase working as intended — row level security
+# is what protects the data, not the obscurity of the key. docs/deployment.md
+# states which keys are publishable, which are not, and how to rotate either.
+#
+# Because they are build-time inputs, a missing variable does not fail at
+# runtime: it produces a bundle that cannot reach the database and looks
+# deployed. So `preflight` FAILS THE RUN when either is absent rather than
+# letting that bundle ship.
+#
+# ── WHICH GATES THIS WORKFLOW CAN RUN, AND WHICH IT CANNOT ───────────────────
+#
+# `scripts/gates.sh` has seven steps. This workflow runs the five that need no
+# database — typecheck, lint, boundaries, boundaries:selftest, test:unit — and
+# then the build, which typechecks again through Next's own pass.
+#
+# `test:integration` and `mutation` are NOT RUN here. They need a PostgreSQL 17
+# cluster with the local emulation of `auth.uid()`, the `anon` and
+# `authenticated` roles, a template database cloned per worker, and `psql` on
+# PATH. None of that exists on a bare runner, and `gates.sh` is explicit that an
+# unexecuted check is NOT RUN and never a pass — so this workflow does not
+# invoke `gates.sh` wholesale, because it would be permanently red, and it does
+# not quietly drop the two steps either. It names them, in the job summary of
+# every run.
+#
+# THE CONSEQUENCE, STATED PLAINLY: this pipeline cannot certify that the row
+# level security policies are correct, and under ADR-0015 those policies are
+# the only thing protecting the journal. A green deployment here means the code
+# compiles, lints, respects its import boundaries and passes the unit suite. It
+# does not mean the data is protected. That is settled by the integration suite
+# and the mutation gate, run locally before the push, until a Postgres service
+# container with the emulation is added to this file.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  # Manual runs, so a deployment can be repeated without an empty commit.
+  workflow_dispatch:
+
+# Least privilege. `contents: read` to check out; the other two are what
+# actions/deploy-pages needs to publish and to mint its OIDC token.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and queued rather than cancelled: cancelling a
+# half-finished Pages deployment can leave the site on a mixture of two builds.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Repository VARIABLE first, repository SECRET second. Either store works.
+      # A variable is the honest home for a publishable value — it is readable
+      # in the Actions UI, which matches the fact that it is readable in the
+      # shipped bundle. A secret works too and is masked in logs; that costs
+      # nothing. What matters is that neither value is written here.
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # package.json requires >=20.9.0. 22 is the active LTS line.
+          node-version: '22'
+          cache: npm
+
+      # ── preflight ───────────────────────────────────────────────────────────
+      # Fails the run on a missing variable rather than building a bundle that
+      # silently cannot reach the database. It reports only LENGTHS and the
+      # decoded ROLE, never a key.
+      - name: Preflight — configuration is present and is a publishable key
+        run: |
+          set -euo pipefail
+
+          fail=0
+          if [ -z "${NEXT_PUBLIC_SUPABASE_URL:-}" ]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_URL is not set. Add it as a repository variable (Settings -> Secrets and variables -> Actions -> Variables) or as a secret. Without it the build produces a bundle that cannot reach the database."
+            fail=1
+          fi
+          if [ -z "${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}" ]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY is not set. Add it as a repository variable or secret. Without it the build produces a bundle that cannot reach the database."
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+
+          case "$NEXT_PUBLIC_SUPABASE_URL" in
+            https://*.supabase.co|https://*.supabase.co/|https://*.supabase.in|https://*.supabase.in/) ;;
+            *)
+              echo "::error::NEXT_PUBLIC_SUPABASE_URL is not an https Supabase project URL. Expected https://<project-ref>.supabase.co"
+              exit 1
+              ;;
+          esac
+
+          # ── The mistake this guard exists for ────────────────────────────────
+          # Pasting the SERVICE ROLE key into NEXT_PUBLIC_SUPABASE_ANON_KEY
+          # publishes a key with rolbypassrls to the open internet, where it
+          # reads and writes every row of every user's journal and no policy
+          # stops it. Nothing else in the pipeline would notice: the build
+          # succeeds, the page works BETTER than it should, and the breach is
+          # total. So the key's own role claim is decoded and checked.
+          key="$NEXT_PUBLIC_SUPABASE_ANON_KEY"
+          echo "key length: ${#key} characters"
+
+          case "$key" in
+            sb_secret_*)
+              echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY holds an sb_secret_ key. Secret keys bypass row level security and must never be published. Replace it with the publishable (sb_publishable_) key and ROTATE the secret key now — assume it is compromised."
+              exit 1
+              ;;
+            sb_publishable_*)
+              echo "key format: sb_publishable_ (publishable by design)"
+              ;;
+            eyJ*)
+              # A legacy JWT key. Decode the payload (base64url, padded) and
+              # read the role claim. `tr` does the url-safe alphabet; python3
+              # is present on ubuntu-latest and does the padding.
+              role="$(printf '%s' "$key" \
+                | cut -d. -f2 \
+                | python3 -c 'import base64,json,sys; s=sys.stdin.read().strip(); s+="="*(-len(s)%4); print(json.loads(base64.urlsafe_b64decode(s)).get("role",""))')"
+              echo "key format: legacy JWT, role claim: ${role}"
+              if [ "$role" != "anon" ]; then
+                echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY carries role '${role}', not 'anon'. Only the anon key may be published. If this is the service_role key, ROTATE IT NOW and treat every row as read."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY is in a format this workflow does not recognise, so it cannot verify that publishing it is safe. Refusing to build rather than guessing."
+              exit 1
+              ;;
+          esac
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── gates, every one of them run, before anything is published ─────────
+      # Each gate is its own step so the log says which one failed. A failing
+      # step fails the job, and `deploy` needs this job, so a red gate cannot
+      # publish. `continue-on-error` is deliberately absent everywhere.
+      - name: Gate 1/5 — typecheck
+        run: npx tsc --noEmit
+
+      - name: Gate 2/5 — lint
+        run: npx eslint .
+
+      - name: Gate 3/5 — import boundaries
+        run: npx tsx scripts/check-import-boundaries.ts
+
+      - name: Gate 4/5 — import boundaries, positive control
+        run: npx tsx scripts/check-import-boundaries.ts --selftest
+
+      - name: Gate 5/5 — unit suite
+        run: npx vitest run --config vitest.unit.config.ts
+
+      - name: Build the static export
+        run: npx next build
+
+      # ── the export is checked before it is uploaded, not after ─────────────
+      - name: Verify the export
+        run: |
+          set -euo pipefail
+
+          [ -d out ] || { echo "::error::next build produced no out/ directory. Check that next.config.ts still sets output: 'export'."; exit 1; }
+          [ -f out/index.html ] || { echo "::error::out/index.html is missing, so the site has no entry point."; exit 1; }
+
+          # basePath. The site is a PROJECT page under /statesman-os/, so an
+          # absolute asset path without that prefix 404s and the page renders
+          # blank with no error in the HTML. Checked against the emitted file
+          # rather than against next.config.ts, because the config is the
+          # intent and the emitted HTML is the fact.
+          if grep -q '"/_next/' out/index.html; then
+            echo "::error::out/index.html references /_next/ without the /statesman-os basePath. Every asset would 404 and the page would render blank. Fix basePath/assetPrefix in next.config.ts."
+            exit 1
+          fi
+          if ! grep -q '/statesman-os/_next/' out/index.html; then
+            echo "::error::out/index.html references no /statesman-os/_next/ asset at all, so the basePath check above proved nothing. Refusing to deploy an export this check could not examine."
+            exit 1
+          fi
+          echo "basePath: every asset reference in out/index.html is prefixed."
+
+      - name: Audit the bundle for anything that must not be published
+        run: |
+          set -euo pipefail
+
+          # A positive control FIRST. If this grep cannot find the key the build
+          # was given — a string known to be in the bundle — then every "0
+          # matches" below is the instrument failing, not the bundle being
+          # clean. Canon: no gate without a positive control.
+          if ! grep -rqF -- "$NEXT_PUBLIC_SUPABASE_ANON_KEY" out; then
+            echo "::error::The publishable key the build was given is not present in out/. Either the build did not inline it (so the page cannot reach the database) or this scanner cannot read the bundle. Either way the checks below would be meaningless."
+            exit 1
+          fi
+          echo "control: the scanner can find a known string in out/."
+
+          bad=0
+
+          # Any sb_secret_ token at all.
+          if grep -rqE 'sb_secret_[A-Za-z0-9_-]{8,}' out; then
+            echo "::error::A secret-format Supabase key (sb_secret_...) appears in the export. Do not deploy. Rotate it immediately."
+            bad=1
+          fi
+
+          # Every JWT-shaped token in the bundle must BE the publishable key.
+          # Any other one is unexplained, and an unexplained credential in a
+          # public artefact is a leak until proven otherwise.
+          while IFS= read -r tok; do
+            [ -n "$tok" ] || continue
+            if [ "$tok" != "$NEXT_PUBLIC_SUPABASE_ANON_KEY" ]; then
+              echo "::error::A JWT-shaped token that is not the publishable key appears in the export. Do not deploy. Identify and rotate it."
+              bad=1
+            fi
+          done <<< "$(grep -rhoE 'eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}' out | sort -u)"
+
+          # A database connection string, by any spelling.
+          if grep -rqE 'postgres(ql)?://' out; then
+            echo "::error::A PostgreSQL connection string appears in the export. Do not deploy."
+            bad=1
+          fi
+
+          # The literal names of the values that must never ship. `service_role`
+          # appears legitimately inside @supabase/supabase-js as part of a key
+          # FORMAT predicate (startsWith("sb_secret_") and friends), so the
+          # literal word alone is not evidence; what is checked is an
+          # assignment-shaped occurrence next to one of our variable names.
+          if grep -rqE 'SUPABASE_SERVICE_ROLE_KEY|SUPABASE_DB_PASSWORD' out; then
+            echo "::error::The name of a server-only secret appears in the export, which means something read it at build time. Do not deploy."
+            bad=1
+          fi
+
+          [ "$bad" -eq 0 ] || exit 1
+          echo "audit: no secret-shaped value in the export other than the publishable key."
+
+      # actions/deploy-pages serves the artefact as-is and does not run Jekyll,
+      # so `_next/` is not stripped. The file costs one byte of insurance
+      # against that ever changing, or against someone enabling the legacy
+      # branch-based Pages build.
+      - name: Add .nojekyll
+        run: touch out/.nojekyll
+
+      - name: Record which gates ran, and which did not
+        if: always()
+        run: |
+          {
+            echo "## Gates in this run"
+            echo
+            echo "| Gate | Where |"
+            echo "|---|---|"
+            echo "| typecheck | ran here |"
+            echo "| lint | ran here |"
+            echo "| boundaries | ran here |"
+            echo "| boundaries:selftest | ran here |"
+            echo "| test:unit | ran here |"
+            echo "| build + export audit | ran here |"
+            echo "| **test:integration** | **NOT RUN** — needs PostgreSQL 17 with the \`auth.uid()\` emulation, the \`anon\`/\`authenticated\` roles, a cloned template database and \`psql\`. |"
+            echo "| **mutation** | **NOT RUN** — same database dependency; it is the gate that proves the others can fail. |"
+            echo
+            echo "A green run here means the code compiles, lints, respects its import"
+            echo "boundaries and passes the unit suite. **It does not mean the row level"
+            echo "security policies are correct**, and under ADR-0015 those policies are the"
+            echo "only thing protecting the journal. Run \`bash scripts/gates.sh\` locally"
+            echo "before pushing."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # `enablement: true` turns Pages on for the repository if it is off, and
+      # sets the source to GitHub Actions. MEASURED on 2026-10-21:
+      # `GET /repos/TheStormKingG/statesman-os/pages` answered 404, so Pages is
+      # NOT configured, and without this flag the first run would reach
+      # `deploy` and fail there with "Pages site not found" after every gate had
+      # already passed — a failure at the last step for a reason that has
+      # nothing to do with the code. The manual equivalent is
+      # Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload the export
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    # `needs: build` is the whole point: a red gate cannot publish, because
+    # every gate is a step of `build` and a failed step fails the job.
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

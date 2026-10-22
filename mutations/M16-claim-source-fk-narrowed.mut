@@ -27,7 +27,7 @@ expect: caught
 proves: a fabricated citation is unpersistable by schema constraint, and the constraint shape is observed
 expect-test: a fabricated citation is unpersistable: the composite FK rejects a (source_id, scenario_version_id) pair that does not exist
 
-file: migrations/0008_scenario_content.sql
+file: supabase/migrations/20261021140700_scenario_content.sql
 count: 1
 @@FIND
   constraint scenario_claim_source_fk foreign key (source_id, scenario_version_id)

@@ -1,17 +1,90 @@
 #!/usr/bin/env bash
-# Applies migrations/0*.sql in LEXICAL order, then runs the posture check.
-# Lexical glob, never a hand-maintained list, so a new migration cannot be omitted.
+# scripts/migrate.sh — run the Supabase-shaped migration set against a LOCAL database.
+#
+# Order, and all three steps are mandatory:
+#   1. scripts/emulate-supabase.sh      the parts of Supabase the set depends on
+#   2. supabase/migrations/*.sql        the ported set, in LEXICAL order
+#   3. app.verify_security_posture()    the release gate (ADR-0015), as `postgres`
+#
+# Lexical glob, never a hand-maintained list, so a new migration cannot be omitted. The
+# Supabase CLI orders by the same timestamp prefix, so local order and remote order are
+# the same ordering rather than two orderings that happen to agree.
+#
+# WHAT THIS SCRIPT IS NOT: it is not `supabase db push`. It applies the set to a local
+# database that scripts/emulate-supabase.sh has shaped to look like the project. Pushing
+# to project onpkspfxfmjkqpomcsse is a separate, deliberate act and is not automated here.
+#
+# ===========================================================================
+# EXIT STATUS, which this project has got wrong twice
+# ===========================================================================
+# psql is NEVER piped into head/tail/grep/tee. A pipeline reports the FILTER's exit
+# status, so a failed migration reads as a success and the run continues over a broken
+# database. Every psql invocation below is bare, its status is captured into a variable on
+# the very next line, and the script exits with that number. `set -o pipefail` is also on,
+# so a pipeline added later by someone who does not read this comment still fails.
 set -euo pipefail
-export LC_ALL="${LC_ALL:-en_US.UTF-8}"          # V27: postmaster needs a valid locale
+
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"                      # V27: postmaster needs a locale
+export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"     # Homebrew PG 17.11
+
 DB="${1:?usage: migrate.sh <database>}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ADMIN_ROLE="${TEST_ADMIN_ROLE:-$(id -un)}"
 
-for f in "$ROOT"/migrations/0*.sql; do
-  case "$(basename "$f")" in 0000_*) continue ;; esac   # bootstrap is run separately
+PSQL=(psql --no-psqlrc -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U "$ADMIN_ROLE")
+
+# ---------------------------------------------------------------------------
+# 1. The emulation bootstrap.
+# ---------------------------------------------------------------------------
+# Runs FIRST and unconditionally, because the very first migration references
+# `auth.users` and the `postgres` role. Idempotent, so re-running a migrate is safe.
+echo "==> emulate-supabase.sh $DB"
+bash "$ROOT/scripts/emulate-supabase.sh" "$DB"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  echo "migrate: emulation bootstrap failed (exit $rc)" >&2
+  exit $rc
+fi
+
+# ---------------------------------------------------------------------------
+# 2. The set.
+# ---------------------------------------------------------------------------
+shopt -s nullglob
+files=("$ROOT"/supabase/migrations/*.sql)
+if [[ ${#files[@]} -eq 0 ]]; then
+  # A silent zero-migration run would leave an empty database that the posture check
+  # passes trivially — every rule enumerates relations, and there are none. V7's rule
+  # applied to the migration runner itself: a count of 0 is never a success signal.
+  echo "migrate: no migrations found in $ROOT/supabase/migrations — refusing to report success" >&2
+  exit 2
+fi
+
+for f in "${files[@]}"; do
   echo "==> $(basename "$f")"
-  psql -d "$DB" -v ON_ERROR_STOP=1 -q -f "$f"
+  "${PSQL[@]}" -d "$DB" -f "$f"
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "migrate: $(basename "$f") failed (psql exit $rc)" >&2
+    exit $rc
+  fi
 done
 
-echo "==> verify_security_posture()"
-psql -d "$DB" -v ON_ERROR_STOP=1 -qAt -c "set role statesman_owner; select app.verify_security_posture();"
+# ---------------------------------------------------------------------------
+# 3. The posture check.
+# ---------------------------------------------------------------------------
+# ADR-0015: with the server boundary and the grant model both gone, "the posture check and
+# the mutation gate stop being good practice and become the only thing standing between a
+# policy typo and the journal. This is now a release gate, not a quality measure."
+#
+# Run as `postgres`, because app.verify_security_posture() is SECURITY INVOKER and reads
+# the three posture registries, which `authenticated` deliberately cannot see. It is
+# granted to no role; making it a definer function reachable by `authenticated` would be a
+# hole in the thing that exists to find holes.
+echo "==> app.verify_security_posture()"
+"${PSQL[@]}" -d "$DB" -qAt -c "set role postgres; select app.verify_security_posture();"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  echo "migrate: SECURITY POSTURE FAILED (psql exit $rc)" >&2
+  exit $rc
+fi
 echo "posture OK"

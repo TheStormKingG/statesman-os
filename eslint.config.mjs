@@ -68,23 +68,41 @@ const UNIVERSAL_SYNTAX_SELECTORS = [
   },
 ]
 
-/** The driver ban. Canon §6.1: `pg` may be imported only from src/server/db/. */
+/**
+ * THE ONE DIRECTORY THE DRIVER MAY BE IMPORTED FROM.
+ *
+ * Canon §6.1 wrote this as `src/server/db/`. ADR-0015 made the application a
+ * static export talking to Supabase from the browser: there is no server
+ * process and no server-side pool, so the former data boundary now lives in
+ * `tests/support/scoped-pg/`, where the integration harness still needs a
+ * driver to issue arbitrary SQL as a chosen role. The rule is unchanged and its
+ * effect is stronger — the permitted directory is no longer under `src/` at
+ * all, so no production file can import `pg` even by being in the right place.
+ *
+ * Kept as one constant so this file and
+ * `scripts/check-import-boundaries.ts`'s `DB_DIR_SEGMENTS` cannot disagree
+ * about where the boundary is. The enforcing gate remains the AST checker,
+ * which resolves specifiers; this is the fast editor signal.
+ */
+const DB_DIR = 'tests/support/scoped-pg'
+
+/** The driver ban. Canon §6.1, re-pointed by ADR-0015. */
 const PG_DRIVER_PATHS = [
   {
     name: 'pg',
-    message: 'The pg driver may be imported only from src/server/db/. Use withUser/withMigrator.',
+    message: `The pg driver may be imported only from ${DB_DIR}/ (test-only; ADR-0015 removed the server pool). The production data layer is src/lib/supabase/.`,
   },
   {
     name: 'pg-pool',
-    message: 'pg-pool exports Pool directly. Same boundary as pg (src/server/db/ only).',
+    message: `pg-pool exports Pool directly. Same boundary as pg (${DB_DIR}/ only).`,
   },
 ]
 
 /** The module-private pool. Canon §6.1: only withUser/withMigrator leave the db module. */
 const POOL_PRIVACY_PATTERNS = [
   {
-    group: ['**/server/db/pool', '**/server/db/pool.*'],
-    message: 'src/server/db/pool.ts is module-private. Only withUser and withMigrator are exported.',
+    group: [`**/scoped-pg/pool`, `**/scoped-pg/pool.*`],
+    message: `${DB_DIR}/pool.ts is module-private. Only withUser and withMigrator are exported.`,
   },
 ]
 
@@ -93,6 +111,15 @@ export default tseslint.config(
     ignores: [
       'node_modules/**',
       '.next/**',
+      // The static export, for exactly the reason `.next/**` is here: it is
+      // build output, not source. ADR-0015 set `output: 'export'`, which emits
+      // `out/`, and MEASURED after the first such build: `eslint .` linted the
+      // emitted bundle and reported 3,217 errors in `out/_next/static/**`
+      // (`'self' is not defined`, minifier artefacts and the like), so the lint
+      // gate went permanently red the moment anyone ran a build. ESLint flat
+      // config does not read `.gitignore`, so being ignored by git was not
+      // enough.
+      'out/**',
       'dist/**',
       'build/**',
       'coverage/**',
@@ -151,10 +178,10 @@ export default tseslint.config(
   },
 
   {
-    // ── src/server/db/ IS the module that owns the driver and the pool.
+    // ── tests/support/scoped-pg/ IS the module that owns the driver and the pool.
     //
     // The `pg` ban says in its own message that the driver "may be imported only
-    // from src/server/db/", but it was applied to every file including that
+    // from tests/support/scoped-pg/", but it was applied to every file including that
     // directory, so pool.ts and scoped.ts were reported for doing the one thing
     // the rule exists to permit. The boundary is unchanged for everyone else.
     //
@@ -162,7 +189,7 @@ export default tseslint.config(
     // inside this module, and `scoped.ts` reaching it is the module's own
     // internals, not a leak. The enforcing gate for both remains
     // `npm run boundaries`, which resolves specifiers rather than matching strings.
-    files: ['src/server/db/**/*.ts'],
+    files: [`${DB_DIR}/**/*.ts`],
     rules: {
       'no-restricted-imports': 'off',
     },
@@ -172,7 +199,7 @@ export default tseslint.config(
     // ── The designated test-setup importer of the module-private pool.
     //
     // `closePools` and `resetPrivilegeAssertionCacheForTests` are deliberately not
-    // re-exported by src/server/db/index.ts, and pool.ts's own doc comment
+    // re-exported by tests/support/scoped-pg/index.ts, and pool.ts's own doc comment
     // prescribes that test setup import them from `./pool` directly. This file is
     // the single place in tests/ that does so.
     //
@@ -201,7 +228,7 @@ export default tseslint.config(
     // initialiser of this one declaration", so the containment here is the file
     // list, not the rule. The `unknown`-laundering and SQL-interpolation bans are
     // restated below and remain active in both files.
-    files: ['src/server/session/resolve.ts', 'src/server/db/scoped.ts'],
+    files: [`${DB_DIR}/session.ts`, `${DB_DIR}/scoped.ts`],
     rules: {
       'no-restricted-syntax': ['error', ...UNIVERSAL_SYNTAX_SELECTORS],
     },

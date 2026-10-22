@@ -17,12 +17,12 @@ id: M2
 title: withUser's eager `select app.require_user_id()` replaced by a self-agreeing local row
 expect: caught
 proves: the eager context probe (canon 6.1 step 4, V6) is exercised by a real round trip
-expect-test: rejects with ContextMismatchError when app.require_user_id() disagrees
+expect-test: rejects with ContextMismatchError when auth.uid() disagrees
 
-file: src/server/db/scoped.ts
+file: tests/support/scoped-pg/scoped.ts
 count: 1
 @@FIND
-  const probe = await client.query(REQUIRE_USER_SQL)
+  const probe = await client.query(IDENTITY_PROBE_SQL)
 @@REPLACE
-  const probe = { rows: [{ user_id: userId }] }
+  const probe = { rows: [{ user_id: userId, claim: userId }] }
 @@END

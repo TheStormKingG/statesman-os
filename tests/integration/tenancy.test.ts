@@ -9,7 +9,8 @@
  * rows while raising nothing (V7, V19). So no assertion in this file rests on a
  * row count of zero alone. Each denial is stated as a DIFFERENCE taken with the
  * same role, the same statement text, the same parameters and the same data —
- * where the only thing that varies is the identity in `app.current_user_id`.
+ * where the only thing that varies is the identity in `request.jwt.claim.sub`,
+ * which is the GUC `auth.uid()` reads (ADR-0015 §4.3).
  * A difference of 1 vs 0 under those conditions is attributable to the tenancy
  * predicate and to nothing else.
  *
@@ -21,20 +22,21 @@
  * ---------------------------------------------------------------------------
  * TWO MEASURED DEPARTURES FROM THE VERIFIED-FACTS REGISTER
  * ---------------------------------------------------------------------------
- * Both were established by execution against this cluster while writing this
- * file, and both are recorded here rather than smoothed over.
+ * Both were established by execution against this cluster, and both are
+ * recorded here rather than smoothed over.
  *
- * (a) V6 says a no-context `select ... where id = '<nonexistent uuid>'` returns
- *     rc=0, zero rows and no error. On this cluster, against `public.decision`
- *     and `public.decision_revision` under the `app.require_user_id()` policy,
- *     it RAISES 28000 — for an existent id, a nonexistent id, a prepared
- *     statement, `enable_seqscan = off`, a bare `count(*)`, and even for
- *     `EXPLAIN` with no `ANALYZE`. See the comment on test 3: the `EXPLAIN` leg
- *     is the discriminating evidence, and the conclusion V6 is cited for
- *     (validate the context eagerly) survives intact — for a stronger reason
- *     than V6 gives. Canon's own INV-05 requires exactly this raise, so the
- *     register and the invariant list disagree with each other; the invariant
- *     is what reproduces.
+ * (a) THIS ENTRY IS INVERTED BY THE PORT, and the inversion is kept visible
+ *     rather than edited out. It used to read: "V6 says a no-context read
+ *     returns zero rows and no error; on this cluster it RAISES 28000, even
+ *     under bare `EXPLAIN`, because planning evaluated the STABLE raising
+ *     accessor". That was true of `app.require_user_id()`. The policies now call
+ *     `auth.uid()`, which RETURNS NULL (ADR-0015's first measured loss,
+ *     port finding P2), so `user_id = NULL` is never true, the scan returns
+ *     nothing and nothing is raised. V6's original wording is what reproduces
+ *     now; canon's INV-05, which requires the raise, applies only to the retired
+ *     accessor. Test 3 measures both halves of the new behaviour, including the
+ *     `EXPLAIN` leg, as the deliberate record that the fail-loud property was
+ *     LOST and not merely relocated. Where it still lives is named there.
  *
  * (b) Canon §8.2 prescribes "inside a rolled-back transaction, DROP the policy
  *     and assert the row becomes visible". Measured: dropping the only policy
@@ -47,13 +49,17 @@
  * ---------------------------------------------------------------------------
  * FIXTURE SHAPE
  * ---------------------------------------------------------------------------
- * The template database ships the sentinels of migration 0006 and nothing else;
+ * The template database ships the sentinels of 20261021140600 and nothing else;
  * `aaaaaaaa-…0001` / `bbbbbbbb-…0002` live in `statesman_dev`, not here. So this
  * file seeds its own A and B.
  *
- *   - `app_user` rows go in through `ownerQuery`, because `app_user` has no
- *     grants to `statesman_app` at all (§4.6) and `statesman_migrator` is
- *     `noinherit`, so even `withMigrator` cannot reach it without `SET ROLE`.
+ *   - identity rows go in through `ownerQuery` (as `postgres`), because the
+ *     chain is now `decision → public.profile → auth.users` and `auth.users` is
+ *     the platform's: `authenticated` holds nothing on it at all. The pre-port
+ *     reason — `app_user` had no grants to the app role — is retired with the
+ *     table (ADR-0015 §4.6 / port notes §1), and `public.profile` IS reachable
+ *     by `authenticated`, which is why test 8 below is a paired policy control
+ *     rather than a grant-absence assertion.
  *   - every `decision` / `decision_revision` row goes in through the real
  *     `withUser` (§8.3), so a missing INSERT policy surfaces here instead of
  *     being bypassed by a privileged fixture.
@@ -63,6 +69,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   EXPECTED_APP_ROLE,
   appQuery,
+  assertTestConnectionIdentity,
   ensureWorkerDatabase,
   harnessEnv,
   ownerQuery,
@@ -70,17 +77,18 @@ import {
   queryRows,
   releaseProductionPools,
   runAsUser,
+  runScopedAs,
   workerDatabaseName,
 } from './support/db'
 import type { ConnectionIdentity } from './support/db'
 import {
-  NO_USER_CONTEXT,
+  
   PROTECTED_TABLES,
   SENTINEL_DECISION_ID,
   SENTINEL_USER_ID,
   assertSentinelIntegrity,
 } from './support/sentinels'
-import { PermissionDeniedError, StatesmanError, submitDecision } from '../../src/server/db'
+import { PermissionDeniedError, StatesmanError, submitDecision } from '../support/scoped-pg'
 
 // ---------------------------------------------------------------------------
 // Identities and fixed ids
@@ -127,13 +135,23 @@ const UPDATE_DRAFT =
   'update public.decision set draft_payload = $1::jsonb where id = $2::uuid'
 const INSERT_DECISION =
   'insert into public.decision (id, user_id, draft_payload) values ($1::uuid, $2::uuid, $3::jsonb)'
-const WHO_AM_I = 'select app.require_user_id()::text as me'
-
-const GRANT_PROTECTED = [
-  { table: 'app_user', sql: 'select 1 as probe from public.app_user limit 1' },
-  { table: 'user_session', sql: 'select 1 as probe from public.user_session limit 1' },
-  { table: 'auth_attempt', sql: 'select 1 as probe from public.auth_attempt limit 1' },
-] as const
+/**
+ * The identity, read BOTH ways, in one statement.
+ *
+ * `auth.uid()` is what every policy in `supabase/migrations/` consults, so it is
+ * the authoritative column here. `app.require_user_id()` is the raising wrapper
+ * that survives for the lifecycle SECURITY DEFINER functions and nothing else
+ * (port finding P2); reading it alongside asserts the first half of finding P1 —
+ * that the wrapper inside a definer body still resolves to the CALLER — rather
+ * than taking it on trust. EXECUTE on both is granted to `authenticated` by
+ * 20261021140100.
+ *
+ * Reading only the wrapper, as this did pre-port, would measure the wrapper
+ * instead of the accessor the policy uses. Reading only the accessor would lose
+ * the one remaining fail-loud signal in the schema.
+ */
+const WHO_AM_I =
+  'select auth.uid()::text as me, app.require_user_id()::text as wrapped'
 
 /** Sentinel marker for a NULL timestamp, so `null` and `''` cannot be confused. */
 const NO_TIMESTAMP = '(null)'
@@ -144,8 +162,12 @@ const NO_TIMESTAMP = '(null)'
 
 /**
  * psql prints the SQLSTATE inline only because `db.ts` passes
- * `VERBOSITY=verbose`: `ERROR:  28000: no user context`. Without it the line
- * carries no code and a 42501 would be indistinguishable from a 28000.
+ * `VERBOSITY=verbose`: `ERROR:  42P01: relation "public.app_user" does not
+ * exist`. Without it the line carries no code, and the one surviving caller
+ * (test 8) depends on telling 42P01 "the table is gone" from 42501 "the table is
+ * there and ungranted" — which are different worlds and must not both read as a
+ * pass. The pre-port example here was a 28000 from a policy; no policy raises
+ * that any more (port finding P2).
  */
 const PG_ERROR_WITH_CODE = /\bERROR:\s+([0-9A-Z]{5}):/
 
@@ -263,14 +285,22 @@ beforeAll(async () => {
   // promise, so there is no path to the database that skips it.
   identity = await ensureWorkerDatabase()
 
-  // app_user: grant-protected, so the owner seeds it. `on conflict do nothing`
+  // The identity rows, through the owner connection. `on conflict do nothing`
   // keeps this idempotent without a DELETE, which decision_revision's
   // append-only triggers would forbid anyway (V32).
   await ownerQuery(
-    `insert into public.app_user (id, email, password_hash, algo_ver)
-     values (:'a', 'a-tenancy@statesman.invalid', '!not-a-hash:fixture-cannot-authenticate', 1),
-            (:'b', 'b-tenancy@statesman.invalid', '!not-a-hash:fixture-cannot-authenticate', 1)
-     on conflict (id) do nothing;`,
+    `-- PORTED (ADR-0015): public.app_user is retired; 20261021140200 replaces the three
+     -- identity tables with public.profile, whose PK carries a REAL foreign key to
+     -- auth.users(id) ON DELETE RESTRICT, so the auth row must exist first. No credential
+     -- column is written: encrypted_password is nullable and NULL can never verify against
+     -- anything, which is stronger than the retired malformed-argon2 trick.
+     insert into auth.users (id, email, created_at, updated_at)
+     values (:'a', 'a-tenancy@statesman.invalid', now(), now()),
+            (:'b', 'b-tenancy@statesman.invalid', now(), now())
+     on conflict (id) do nothing;
+     insert into public.profile (user_id, display_name)
+     values (:'a', 'tenancy fixture A'), (:'b', 'tenancy fixture B')
+     on conflict (user_id) do nothing;`,
     { a: USER_A, b: USER_B },
   )
 
@@ -292,7 +322,7 @@ beforeAll(async () => {
   })
 
   // A's revision, through the definer function rather than a direct INSERT:
-  // statesman_app cannot write `submitted_at` itself (it holds UPDATE on
+  // `authenticated` cannot write `submitted_at` itself (it holds UPDATE on
   // draft_payload only), so this is the only legal way to produce a revision.
   const submitted = await runAsUser(USER_A, (db) =>
     submitDecision(db, {
@@ -354,7 +384,13 @@ describe('tenancy', () => {
          from pg_roles r
         where r.rolname in (:'app', :'owner', :'admin')
         order by r.rolname;`,
-      { app: EXPECTED_APP_ROLE, owner: 'statesman_owner', admin: adminRole },
+      // `postgres` replaces the retired schema-owner role (ADR-0015 §4.1): it owns every
+      // relation in `public` and — unlike its predecessor, whose `rolbypassrls` was
+      // FALSE (V34) — it is ALSO bypassrls, which is why it is the right positive control
+      // here. MEASURED: it makes `rolbypassrls::text` come back 'true' for a role whose
+      // `rolsuper` is 'false', proving the two columns are read independently rather than
+      // one standing in for the other. That combination is the whole trap ADR-0015 names.
+      { app: EXPECTED_APP_ROLE, owner: 'postgres', admin: adminRole },
     )
     expect(roles).toHaveLength(3)
 
@@ -367,86 +403,150 @@ describe('tenancy', () => {
     expect(parseBoolean(cell(roles, adminRole, 1), 'admin.rolsuper')).toBe(true)
     expect(parseBoolean(cell(roles, adminRole, 2), 'admin.rolbypassrls')).toBe(true)
 
-    // And the owned-table count is not constant-zero: the schema owner owns the
-    // tables the app role must not.
-    expect(intCell(roles, 'statesman_owner', 3)).toBeGreaterThan(0)
-  })
+    // And the owned-relation count is not constant-zero: on Supabase our relations are
+    // owned by `postgres`, which is the role the app role must not be.
+    expect(intCell(roles, 'postgres', 3)).toBeGreaterThan(0)
 
-  // -------------------------------------------------------------------------
-  // 2. Missing context, existing row.
-  // -------------------------------------------------------------------------
-  it('[FR-14] a no-context read of an EXISTING protected row raises 28000, and the same read with context returns it', async () => {
-    // No BEGIN, no set_config: `appQuery` is a bare psql statement as
-    // statesman_app, which is the genuine no-context case.
-    const code = await sqlstateFromPsql(() =>
-      appQuery("select 'row', id::text from public.decision where id = :'did';", {
-        did: SENTINEL_DECISION_ID,
-      }),
-    )
-    expect(code).toBe(NO_USER_CONTEXT)
-
-    // POSITIVE CONTROL. Byte-identical statement, same role, same row, same
-    // session shape — the ONLY difference is that `app.current_user_id` is set.
-    // Without this leg a 28000 could be coming from anywhere, and the row might
-    // not exist at all.
-    const withContext = await appQuery(
-      `begin;
-       select set_config('app.current_user_id', :'uid', true);
-       select 'row', id::text from public.decision where id = :'did';
-       rollback;`,
-      { uid: SENTINEL_USER_ID, did: SENTINEL_DECISION_ID },
-    )
-    expect(cell(withContext, 'row', 1)).toBe(SENTINEL_DECISION_ID)
-  })
-
-  // -------------------------------------------------------------------------
-  // 3. Missing context, NON-EXISTENT row — the V6 leg.
-  // -------------------------------------------------------------------------
-  it('[FR-14] a no-context read by a NON-EXISTENT id also raises 28000 on this cluster, at PLAN time — which is why withUser validates the context eagerly', async () => {
-    // V6 records this case as "rc=0, zero rows, no error", and the canon cites
-    // it for the eager `app.require_user_id()` call in withUser (§6.1 step 4).
-    // MEASURED HERE: it raises 28000. Asserted as measured rather than as
-    // written, because a test that asserts the register over the cluster is a
-    // test of the document.
-    const absent = await sqlstateFromPsql(() =>
-      appQuery("select 'row', id::text from public.decision where id = :'did';", {
-        did: ABSENT_DECISION_ID,
-      }),
-    )
-    expect(absent).toBe(NO_USER_CONTEXT)
-
-    // THE DISCRIMINATING LEG, and the reason this is not merely "V6 is wrong".
-    // `EXPLAIN` without `ANALYZE` executes nothing, so no candidate row can
-    // reach any qual — yet it raises too. The raise is therefore produced while
-    // PLANNING, when selectivity estimation evaluates the STABLE accessor in
-    // `user_id = app.require_user_id()`, not by the policy filtering a row.
+    // =====================================================================
+    // THE GUARD'S OWN NEGATIVE CONTROL — the leg this test's title promises and
+    // the leg mutation M22 names as its catcher.
+    // =====================================================================
+    // Everything above measures the guard's INPUTS: that its three predicates
+    // return privileged values for other roles. That is not the same claim as
+    // "the guard refuses a privileged connection", and the difference is not
+    // academic — the predicates could all be correct while the clause that acts
+    // on them had been deleted, and this test would stay green. ADR-0015 requires
+    // this guard to ABORT rather than warn, so the abort itself has to be
+    // observed.
     //
-    // That makes it worthless as a denial signal: it is a property of the plan
-    // the planner happened to choose, and it would disappear behind a cached
-    // generic plan, a different predicate shape, or a policy written with a
-    // non-raising accessor. V6's conclusion survives its observation —
-    // the context must be validated eagerly and explicitly, because the query
-    // path cannot be relied on to raise.
-    const explained = await sqlstateFromPsql(() =>
-      appQuery("explain (costs off) select id from public.decision where id = :'did';", {
-        did: ABSENT_DECISION_ID,
-      }),
-    )
-    expect(explained).toBe(NO_USER_CONTEXT)
+    // So the guard is pointed at `postgres` on this worker's own database and
+    // required to THROW. This is the trap ADR-0015 names: `rolsuper` is FALSE
+    // there, so a superuser-only predicate would admit the one role on the
+    // platform that ignores every policy, and it is the role the CLI and the
+    // dashboard SQL editor use by default.
+    let refusal: unknown
+    try {
+      await assertTestConnectionIdentity(workerDatabaseName(), { role: 'postgres' })
+    } catch (error: unknown) {
+      refusal = error
+    }
+    if (refusal === undefined) {
+      throw new Error(
+        'assertTestConnectionIdentity() ACCEPTED a connection as `postgres`. Every ' +
+          'tenancy, cross-user and forgery assertion in this suite would pass without ' +
+          'enforcing anything, and the guard that is supposed to prevent that has just ' +
+          'declined to.',
+      )
+    }
+    const message = refusal instanceof Error ? refusal.message : describeCaught(refusal)
 
-    // POSITIVE CONTROL. With context set, the identical statement returns zero
-    // rows and raises NOTHING — so the 28000 above is attributable to the
-    // missing context, and absence alone is silent. This is the pairing V19
-    // demands: a nonexistent id and a denied id look the same to the caller,
-    // which is why no service may turn "0 rows" into a 404 on its own.
-    const withContext = await appQuery(
-      `begin;
-       select set_config('app.current_user_id', :'uid', true);
-       select 'found', count(*)::text from public.decision where id = :'did';
-       rollback;`,
-      { uid: USER_A, did: ABSENT_DECISION_ID },
+    // WHICH predicate caught it, not merely that something did. `postgres` fails
+    // several clauses at once, so asserting only "it threw" would stay green with
+    // the BYPASSRLS clause removed — which is exactly mutation M22.
+    expect(message, 'the guard must name BYPASSRLS, the clause that catches `postgres`').toContain(
+      'BYPASSRLS',
     )
-    expect(intCell(withContext, 'found', 1)).toBe(0)
+    // The two independent reasons that are NOT role attributes: ownership (V4)
+    // and membership (V3). MEASURED on this cluster: `postgres` owns 11 relations
+    // in `public` and reaches `service_role`, which is BYPASSRLS.
+    expect(message).toMatch(/owns [1-9][0-9]* relation\(s\) in schema public/)
+    expect(message).toContain('service_role')
+    // And it refused by NAME read back off the live connection, which is what
+    // makes this a statement about the connection rather than about the URL.
+    expect(message).toContain(`current_user is 'postgres'`)
+    // Fatal, not advisory.
+    expect(message).toContain('INTEGRATION HARNESS ABORTED')
+
+    // POSITIVE CONTROL ON THE NEGATIVE CONTROL. The same function, the same
+    // database, the default role: it RESOLVES. Without this, a guard that threw
+    // unconditionally — a typo in the probe SQL, a dropped `auth.uid()` — would
+    // satisfy every assertion above while refusing the whole suite.
+    const accepted = await assertTestConnectionIdentity(workerDatabaseName())
+    expect(accepted.currentUser).toBe(EXPECTED_APP_ROLE)
+    expect(accepted.bypassesRls).toBe(false)
+  })
+
+  // -------------------------------------------------------------------------
+  // 2. No claim, EXISTING row — rewritten: denial is now SILENT.
+  // -------------------------------------------------------------------------
+  it('[FR-14] a no-claim read of an EXISTING protected row returns 0 rows and RAISES NOTHING, while the same read with a claim returns it', async () => {
+    // THIS TEST ASSERTED THE OPPOSITE BEFORE THE PORT, and the change is the point.
+    // `app.require_user_id()` raised 28000; `auth.uid()` returns NULL, so `user_id =
+    // NULL` is never true, the scan returns nothing, and no error is produced. Measured
+    // here rather than assumed, because the whole shape of every denial assertion in
+    // this suite depends on it.
+    const withoutClaim = await appQuery(
+      "select 'n', count(*)::text from public.decision where id = :'did';",
+      { did: SENTINEL_DECISION_ID },
+    )
+    expect(intCell(withoutClaim, 'n', 1)).toBe(0)
+
+    // THE POSITIVE CONTROL, and post-port it is no longer optional decoration — it is
+    // the only thing that distinguishes the zero above from an empty table, a typo'd id,
+    // a failed seed or a missing grant (V18/V19). Byte-identical statement, same role,
+    // same row; the ONLY difference is that a claim is set.
+    const withClaim = await runScopedAs(
+      SENTINEL_USER_ID,
+      "select 'row', id::text from public.decision where id = :'did';",
+      { vars: { did: SENTINEL_DECISION_ID } },
+    )
+    expect(cell(withClaim, 'row', 1)).toBe(SENTINEL_DECISION_ID)
+  })
+
+  // -------------------------------------------------------------------------
+  // 3. No claim, NON-EXISTENT row — the leg that records what was LOST.
+  // -------------------------------------------------------------------------
+  it('[FR-14] with no claim, an EXISTING and a NON-EXISTENT id are indistinguishable — the fail-loud property of V6 is GONE from the policy path', async () => {
+    // WHAT THIS TEST USED TO PROVE. Pre-port, a no-context read raised 28000 for an
+    // existent id, for a nonexistent id, and even under bare `EXPLAIN` — the raise was
+    // produced at PLAN time, when selectivity estimation evaluated the STABLE raising
+    // accessor. That made a missing identity impossible to miss.
+    //
+    // WHAT IT PROVES NOW. Nothing raises. The two reads below are byte-identical except
+    // for the id, and both return zero rows, which is exactly the ambiguity V19 warns
+    // about: a nonexistent row and a denied row look the same to the caller. This is
+    // asserted explicitly, as a deliberate record that the property was lost rather than
+    // overlooked — ADR-0015 lists it as one of the two measured losses of the port.
+    //
+    // WHERE THE PROPERTY WENT. It cannot live in a policy predicate: a policy that
+    // raised would give the local target a failure mode the live one does not have, and
+    // every local denial test would then be measuring the wrapper instead of the policy.
+    // It survives in exactly two places, both instruments rather than policies —
+    // `beginScopedTransaction`'s identity probe in tests/support/scoped-pg/scoped.ts,
+    // which rejects a transaction whose `auth.uid()` is NULL, and `runScopedAs`, which
+    // raises ST099 server-side if the claim did not take effect.
+    const present = await appQuery(
+      "select 'n', count(*)::text from public.decision where id = :'did';",
+      { did: SENTINEL_DECISION_ID },
+    )
+    const absent = await appQuery(
+      "select 'n', count(*)::text from public.decision where id = :'did';",
+      { did: ABSENT_DECISION_ID },
+    )
+    expect(intCell(present, 'n', 1)).toBe(0)
+    expect(intCell(absent, 'n', 1)).toBe(0)
+
+    // EXPLAIN raises nothing either, which is the discriminating half: pre-port it DID,
+    // because the raise came from planning rather than from a row reaching the qual.
+    // A plan coming back at all is the evidence; its text is not asserted.
+    const explained = await appQuery(
+      "explain (costs off) select id from public.decision where id = :'did';",
+      { did: ABSENT_DECISION_ID },
+    )
+    expect(explained.length).toBeGreaterThan(0)
+
+    // THE PAIR THAT STILL WORKS. With a claim, the existing row comes back and the
+    // absent one does not — so the two zeros above are attributable to the missing claim
+    // for the first id and to real absence for the second, which is the only way to tell
+    // them apart now.
+    const withClaim = await runScopedAs(
+      SENTINEL_USER_ID,
+      `select 'present', count(*)::text from public.decision where id = :'did';
+       select 'absent',  count(*)::text from public.decision where id = :'gone';`,
+      { vars: { did: SENTINEL_DECISION_ID, gone: ABSENT_DECISION_ID } },
+    )
+    expect(intCell(withClaim, 'present', 1)).toBe(1)
+    expect(intCell(withClaim, 'absent', 1)).toBe(0)
   })
 
   // -------------------------------------------------------------------------
@@ -454,24 +554,45 @@ describe('tenancy', () => {
   // -------------------------------------------------------------------------
   it('[FR-14] every protected table shows exactly 1 sentinel row to the sentinel user and 0 to anyone else', async () => {
     const reports = await assertSentinelIntegrity()
-    expect(reports).toHaveLength(PROTECTED_TABLES.length)
+
+    // THREE owner-keyed tables plus the FIVE reference tables registered in
+    // public.posture_sentinel_row. The reference five are new to this assertion: under
+    // the pre-port rule 9 they were WAIVED through posture_exempt_table and carried a
+    // sentinel that nothing checked — true the day it was written, with nothing to notice
+    // when it stopped being true. The length is asserted against the owner list plus the
+    // registry rather than a literal 8, so adding a protected table cannot quietly shrink
+    // what this test covers.
+    const ownerKeyed = reports.filter((r) => r.keyedBy === 'owner')
+    const referenceKeyed = reports.filter((r) => r.keyedBy === 'reference')
+    expect(ownerKeyed).toHaveLength(PROTECTED_TABLES.length)
+    expect(referenceKeyed.length).toBeGreaterThanOrEqual(5)
 
     for (const report of reports) {
-      // The seed exists, read by the owner with the FORCE bracket off. Without
-      // this, the two legs below are satisfied by an empty table (V18).
-      expect(report.seeded).toBe(1)
-      // As the sentinel user: visible. Under a foreign context: not. Same table,
-      // same WHERE, same role, same statement — only the identity differs.
-      expect(report.asOwnerContext).toBe(1)
-      expect(report.asForeignContext).toBe(0)
+      // The row exists, read as `postgres`. Without this the legs below are satisfied by
+      // an empty table (V18). Read through a BYPASSRLS connection, so it reports
+      // EXISTENCE and says nothing about enforcement.
+      expect(report.seeded, `${report.table}.seeded`).toBe(1)
 
-      // The no-context leg. Asserted as the raise it measurably is (see test 3),
-      // not as "returns 0": a `count(*)` with no context never reaches a row,
-      // so a zero here would be the ambiguous reading V18 warns about, while a
-      // 28000 is unambiguous. A row coming back would be fatal either way.
-      expect(report.withoutContext.kind).toBe('raised')
-      if (report.withoutContext.kind === 'raised') {
-        expect(report.withoutContext.sqlstate).toBe(NO_USER_CONTEXT)
+      // THE CLAIMLESS LEG, AND THE PORT'S CENTRAL CHANGE. Pre-port this asserted a
+      // RAISED 28000. `auth.uid()` returns NULL instead, so the read returns 0 rows and
+      // raises NOTHING — MEASURED. The assertion is therefore inverted: `rows` with a
+      // count of 0 is the correct observation, and a RAISE here is now the anomaly,
+      // because it would mean something is reproducing the retired semantics (or that a
+      // 42501/42P01 is wearing the denial's clothes).
+      expect(report.withoutClaim.kind, `${report.table} claimless read`).toBe('rows')
+      if (report.withoutClaim.kind === 'rows') {
+        expect(report.withoutClaim.count, `${report.table} claimless rows`).toBe(0)
+      }
+
+      // THE POSITIVE CONTROL, which is what makes the zero above mean anything at all:
+      // same table, same WHERE, same role, same statement — only the claim differs.
+      expect(report.withEntitledClaim, `${report.table} entitled`).toBe(1)
+
+      // And the denial, for the owner-keyed tables only. A reference table's policy is
+      // `auth.uid() is not null` by design, so there is no stranger to deny and
+      // asserting one would be asserting more than the design promises.
+      if (report.keyedBy === 'owner') {
+        expect(report.withStrangerClaim, `${report.table} stranger`).toBe(0)
       }
     }
   })
@@ -495,8 +616,13 @@ describe('tenancy', () => {
       // inferred from the client object: a 0 produced by an unset context would
       // be a different fault wearing this one's clothes (and withUser's eager
       // check would already have thrown).
-      const me = await db.queryOne<{ me: string }>(WHO_AM_I)
+      const me = await db.queryOne<{ me: string; wrapped: string }>(WHO_AM_I)
       expect(me.me).toBe(USER_B)
+      // The raising wrapper agrees with the accessor the policy consults, so the
+      // lifecycle definer functions and the policies are scoped to the same user
+      // (port finding P1, first half). A disagreement here would mean the two
+      // halves of the schema enforce against different identities.
+      expect(me.wrapped).toBe(USER_B)
       const decisions = await db.queryOne<{ n: number }>(COUNT_DECISIONS_OWNED_BY, [USER_A])
       const revisions = await db.queryOne<{ n: number }>(COUNT_REVISIONS_OWNED_BY, [USER_A])
       return { decisions: decisions.n, revisions: revisions.n }
@@ -608,70 +734,95 @@ describe('tenancy', () => {
   })
 
   // -------------------------------------------------------------------------
-  // 8. The grant-protected tables — a stronger control than RLS.
+  // 8. The identity table — rewritten: grant-absence is no longer available.
   // -------------------------------------------------------------------------
-  it('[FR-14] app_user, user_session and auth_attempt deny statesman_app outright (42501), and the grant genuinely does not exist', async () => {
-    for (const probe of GRANT_PROTECTED) {
-      const error = await rejectionOf(() => runAsUser(USER_A, (db) => db.query(probe.sql)))
-      expect(error, `public.${probe.table} must deny the app role`).toBeInstanceOf(
-        PermissionDeniedError,
+  it('[FR-14] app_user, user_session and auth_attempt are GONE, and public.profile is reachable but policy-scoped — the grant-absence layer is retired, not weakened', async () => {
+    // WHAT THIS TEST USED TO PROVE, AND WHY IT CANNOT ANY MORE.
+    //
+    // Pre-port the three identity tables had NO grants to the app role at all (canon
+    // §4.6), so they denied with 42501 from the absent grant — a control STRONGER than
+    // RLS, because it does not depend on a policy predicate being right. ADR-0015 retires
+    // ADR-0002 and 20261021140200 replaces all three with `public.profile`. That layer is
+    // therefore GONE, and this test records its removal explicitly rather than being
+    // deleted: a signed-in user edits their own display name directly and there is no
+    // server left to proxy it, so `profile` must be reachable by `authenticated` and is
+    // protected by a policy like any other table.
+    //
+    // THE CONSEQUENCE, STATED PLAINLY: `profile` is now defended by ONE mechanism where
+    // its predecessor had two. That is why 20261021140600 seeds it a sentinel and why
+    // posture rule 9a counts it.
+    //
+    // Leg 1 — the retired tables do not exist. Asserted as 42P01 from a real query rather
+    // than from the catalog alone, so "it is gone" is observed the way a caller would
+    // observe it. A 42501 here would mean the table still exists and is merely ungranted,
+    // which is a different world and must not read as a pass.
+    for (const name of ['app_user', 'user_session', 'auth_attempt'] as const) {
+      const code = await sqlstateFromPsql(() =>
+        appQuery(`select 1 as probe from public.${name} limit 1;`),
       )
-      expect(error.sqlState, `public.${probe.table}`).toBe('42501')
+      expect(code, `public.${name} must no longer exist`).toBe('42P01')
     }
 
-    // POSITIVE CONTROL 1 — grant absence, read from the catalog, with the same
-    // instrument answering `true` for the tables that ARE granted. A denial that
-    // only ever answers `false` cannot distinguish "no grant" from "no table".
-    const privileges = await appQuery(
-      `select 'app_user',          has_table_privilege(:'role','public.app_user','select')::text
+    // POSITIVE CONTROL for leg 1 — the same instrument, same role, on a table that DOES
+    // exist, returns no error at all. Without this, '42P01 everywhere' would also be the
+    // observation if the connection or the database were wrong.
+    const exists = await appQuery("select 'n', count(*)::text from public.profile;")
+    expect(intCell(exists, 'n', 1)).toBe(0) // reachable, and claimless => 0 rows, no error
+
+    // Leg 2 — the catalog agrees that the three are absent and `profile` is present.
+    const rels = await ownerQuery(
+      `select c.relname, 'yes'
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public'
+          and c.relname in ('app_user','user_session','auth_attempt','profile')
+        order by c.relname;`,
+    )
+    expect(rels.map((r) => r[0])).toEqual(['profile'])
+
+    // Leg 3 — `authenticated` holds exactly the narrow grants 20261021140200 intends on
+    // `profile`: SELECT and INSERT, and UPDATE on `display_name` ONLY. The negative half
+    // matters as much as the positive: DELETE must not be held, because erasure is a
+    // product feature with a deliberate path (FR-16) and not a row the client can drop.
+    const privs = await appQuery(
+      `select 'select', has_table_privilege(:'role','public.profile','select')::text
        union all
-       select 'user_session',      has_table_privilege(:'role','public.user_session','select')::text
+       select 'insert', has_table_privilege(:'role','public.profile','insert')::text
        union all
-       select 'auth_attempt',      has_table_privilege(:'role','public.auth_attempt','select')::text
+       select 'delete', has_table_privilege(:'role','public.profile','delete')::text
        union all
-       select 'decision',          has_table_privilege(:'role','public.decision','select')::text
+       select 'upd_display', has_column_privilege(:'role','public.profile','display_name','update')::text
        union all
-       select 'decision_revision', has_table_privilege(:'role','public.decision_revision','select')::text;`,
+       select 'upd_user_id', has_column_privilege(:'role','public.profile','user_id','update')::text;`,
       { role: EXPECTED_APP_ROLE },
     )
-    expect(parseBoolean(cell(privileges, 'app_user', 1), 'app_user select')).toBe(false)
-    expect(parseBoolean(cell(privileges, 'user_session', 1), 'user_session select')).toBe(false)
-    expect(parseBoolean(cell(privileges, 'auth_attempt', 1), 'auth_attempt select')).toBe(false)
-    // The control: the SAME function, the SAME role, on the user-owned tables.
-    expect(parseBoolean(cell(privileges, 'decision', 1), 'decision select')).toBe(true)
-    expect(parseBoolean(cell(privileges, 'decision_revision', 1), 'decision_revision select')).toBe(
-      true,
-    )
+    expect(parseBoolean(cell(privs, 'select', 1), 'profile select')).toBe(true)
+    expect(parseBoolean(cell(privs, 'insert', 1), 'profile insert')).toBe(true)
+    expect(parseBoolean(cell(privs, 'delete', 1), 'profile delete')).toBe(false)
+    expect(parseBoolean(cell(privs, 'upd_display', 1), 'profile update display_name')).toBe(true)
+    expect(parseBoolean(cell(privs, 'upd_user_id', 1), 'profile update user_id')).toBe(false)
 
-    // POSITIVE CONTROL 2 — information_schema agrees, and names zero privileges
-    // of any kind held by the app role on the three tables while naming some on
-    // `decision`. `grant select` would show up here as a row.
-    const granted = await appQuery(
-      `select t.table_name, count(*)::text
-         from information_schema.table_privileges t
-        where t.grantee = :'role' and t.table_schema = 'public'
-          and t.table_name in ('app_user','user_session','auth_attempt','decision')
-        group by t.table_name
-        order by t.table_name;`,
-      { role: EXPECTED_APP_ROLE },
+    // Leg 4 — THE PAIR that replaces the retired grant-absence control. A reaches its own
+    // profile; B does not reach A's. Same statement, same role, only the claim differs,
+    // over a row that demonstrably exists (leg 5).
+    const asA = await runScopedAs(
+      USER_A,
+      "select 'n', count(*)::text from public.profile where user_id = :'a';",
+      { vars: { a: USER_A } },
     )
-    const named = granted.map((row) => row[0])
-    expect(named).not.toContain('app_user')
-    expect(named).not.toContain('user_session')
-    expect(named).not.toContain('auth_attempt')
-    expect(intCell(granted, 'decision', 1)).toBeGreaterThan(0)
+    const asB = await runScopedAs(
+      USER_B,
+      "select 'n', count(*)::text from public.profile where user_id = :'a';",
+      { vars: { a: USER_A } },
+    )
+    expect(intCell(asA, 'n', 1)).toBe(1)
+    expect(intCell(asB, 'n', 1)).toBe(0)
 
-    // POSITIVE CONTROL 3 — the tables exist and are NOT empty. `app_user` holds
-    // the sentinel plus this file's A and B, so the 42501 above is a denial over
-    // real data rather than an exotic way of reading an empty table (V18).
-    // unscoped-count-ok: the claim IS global and a lower bound, not an equality. This
-    // asserts the table is NON-EMPTY so that the 42501 above is a denial over real data
-    // rather than an exotic way of reading an empty table (V18). A scoped count cannot
-    // express that, and `>= 3` is monotonic, so sibling files adding rows can only
-    // strengthen it — which is the opposite of the order-dependence this gate exists for.
-    const owned = await ownerQuery('select count(*)::text from public.app_user;')
-    const ownerSees = Number.parseInt(owned[0]?.[0] ?? 'x', 10)
-    expect(ownerSees).toBeGreaterThanOrEqual(3)
+    // Leg 5 — and the rows are really there, so leg 4's zero is a denial rather than an
+    // empty table. unscoped-count-ok: the claim is a global LOWER BOUND, not an equality,
+    // and a scoped count cannot express it. `>= 3` is the sentinel plus this file's A and
+    // B, and it is monotonic, so sibling files adding profiles can only strengthen it.
+    const all = await ownerQuery('select count(*)::text from public.profile;')
+    expect(Number.parseInt(all[0]?.[0] ?? 'x', 10)).toBeGreaterThanOrEqual(3)
   })
 
   // -------------------------------------------------------------------------
@@ -680,35 +831,45 @@ describe('tenancy', () => {
   it('[FR-19] with the tenancy predicate replaced by `using (true)` inside a rolled-back transaction, B DOES see A\'s row — so the cross-user tests can fail', async () => {
     // Everything happens in ONE psql session, because the policy change is DDL
     // inside an uncommitted transaction: a second connection could not see it
-    // and would block on the lock. The session role is the bootstrap role —
-    // the only role that can both `SET ROLE statesman_owner` (to issue the DDL)
-    // and `SET ROLE statesman_app` (to take the reads). RLS is NOT bypassed by
-    // that: the bypass is decided by the CURRENT role, and the script asserts
-    // `current_user` is statesman_app with rolsuper/rolbypassrls both false at
-    // the moment each read is taken.
+    // and would block on the lock. The session role is the bootstrap role — the
+    // only role that can both `SET ROLE postgres` (to issue the DDL on relations
+    // `postgres` owns) and `SET ROLE authenticated` (to take the reads).
+    //
+    // RLS IS NOT BYPASSED BY THAT, and post-port the reason has to be stated more
+    // carefully than before: the bypass is decided by the CURRENT role, and BOTH
+    // the bootstrap role (rolsuper) and `postgres` (rolbypassrls) would bypass it.
+    // So the script asserts, at the moment each read is taken, that `current_user`
+    // is `authenticated` with `rolsuper` AND `rolbypassrls` both false. Without
+    // that assertion a `reset role` left in the wrong place would make all three
+    // legs read as the bootstrap role and the control would "pass" by bypassing
+    // the very policy it is manipulating.
     //
     // ON_ERROR_STOP=1 means any failure inside the script kills the connection,
     // which rolls the transaction back — so the bracket cannot be left open by
     // a failed assertion.
     const legs = await queryRows(
       `begin;
-       set role statesman_app;
-       select set_config('app.current_user_id', :'b', true);
+       set role authenticated;
+       select set_config('request.jwt.claim.sub', :'b', true);
+       select set_config('request.jwt.claims', '', true);
        select 'reader', current_user,
               (select r.rolsuper::text     from pg_roles r where r.rolname = current_user),
               (select r.rolbypassrls::text from pg_roles r where r.rolname = current_user);
+       select 'claim1', coalesce(auth.uid()::text, '(null)');
        select 'tenancy', count(*)::text from public.decision where user_id = :'a';
 
        reset role;
-       set role statesman_owner;
+       set role postgres;
        drop policy decision_tenancy on public.decision;
-       set role statesman_app;
+       set role authenticated;
+       select 'claim2', coalesce(auth.uid()::text, '(null)');
        select 'dropped', count(*)::text from public.decision where user_id = :'a';
 
        reset role;
-       set role statesman_owner;
+       set role postgres;
        create policy decision_tenancy_disabled on public.decision using (true) with check (true);
-       set role statesman_app;
+       set role authenticated;
+       select 'claim3', coalesce(auth.uid()::text, '(null)');
        select 'permissive', count(*)::text from public.decision where user_id = :'a';
 
        rollback;
@@ -727,6 +888,19 @@ describe('tenancy', () => {
     expect(cell(legs, 'reader', 1)).toBe(EXPECTED_APP_ROLE)
     expect(parseBoolean(cell(legs, 'reader', 2), 'reader.rolsuper')).toBe(false)
     expect(parseBoolean(cell(legs, 'reader', 3), 'reader.rolbypassrls')).toBe(false)
+
+    // AND THE CLAIM TRAVELLED, asserted once per leg. This is not belt and
+    // braces, it is the only thing that makes leg 1 a result at all: post-port a
+    // claim that never arrived makes `auth.uid()` NULL, `user_id = NULL` is never
+    // true, and leg 1's zero appears with nothing raised — identical to the
+    // observation a working policy produces. `set_config(..., true)` is SET LOCAL
+    // and does nothing outside an explicit transaction block, and the two
+    // `reset role` / `set role` pairs between the legs are exactly the kind of
+    // session churn that invites the assumption that it survived. Measured per
+    // leg rather than once, because each leg is read after a role switch.
+    for (const label of ['claim1', 'claim2', 'claim3'] as const) {
+      expect(cell(legs, label, 1), `${label}: auth.uid() inside the bracket`).toBe(USER_B)
+    }
 
     // Leg 1 — the tenancy policy in force: B sees nothing of A's. This is
     // tests 5-7's observation, reproduced here inside the bracket.

@@ -1,4 +1,8 @@
 /**
+ * TEST-ONLY (ADR-0015). Was src/server/db|src/server/session; it has no production
+ * role now that the app talks to Supabase from the browser. See ./index.ts for
+ * what moved, why, and the GUC incompatibility with supabase/migrations/.
+ *
  * The connection pools, the role assertion, and the only `pg` import in the
  * codebase outside this directory's own files.
  *
@@ -119,7 +123,8 @@ const postureRowSchema = z.object({
  * - `owned_relations`: ownership bypasses RLS independently of those attributes
  *   (V4). Counted over tables, partitioned tables, views, matviews and foreign
  *   tables, because a view owner's privileges apply to a view over user data too
- *   (V11). `statesman_app` owns nothing in `public`, so the wider net costs
+ *   (V11). `authenticated` owns nothing in `public` — MEASURED on the built
+ *   template: `authenticated_public_tables_owned = 0` — so the wider net costs
  *   nothing and closes the view case.
  * - `privileged_reachable`: attributes are not inherited, but SET ROLE still
  *   works (V3), so reachability is tested with `pg_has_role(..., 'USAGE')` and
@@ -136,12 +141,21 @@ const postureRowSchema = z.object({
  *   production side: a role that had acquired CREATEROLE was refused by the
  *   tests and accepted by the application.
  *
- *   `statesman_owner` is the reason reachability exists at all. It is neither
- *   superuser nor BYPASSRLS, so an attribute-only test passes for
- *   `statesman_migrator`, which is a member of it. Because `pg_hba` is `trust`
- *   locally, a one-character typo in `APP_DATABASE_URL` — the migrator URL sits
- *   in the same file — connects successfully (V1) as a role that can
- *   `SET ROLE statesman_owner` and then `ALTER TABLE ... NO FORCE`.
+ *   POST-PORT, THE ROLE THIS CLAUSE EXISTS FOR IS `postgres` (ADR-0015).
+ *   `statesman_owner` and `statesman_migrator` are retired. Supabase's
+ *   `postgres` has `rolsuper = false` and `rolbypassrls = TRUE`, so an
+ *   attribute-only test that asked about `rolsuper` alone would admit the one
+ *   role on the platform that ignores every policy — and it is the role the CLI
+ *   and the dashboard SQL editor use by default, so it is the role a typo lands
+ *   on. The emulation also grants `anon`, `authenticated` and `service_role` TO
+ *   `postgres` and TO `authenticator`, so the membership graph is real here, not
+ *   hypothetical: `authenticator` is NOINHERIT and holds `service_role`, which
+ *   is V3 exactly — an attribute check passes it while `SET ROLE` succeeds.
+ *
+ *   Because `pg_hba` is `trust` locally, a one-character typo in
+ *   `APP_DATABASE_URL` connects successfully (V1) as whatever role it names,
+ *   with no password error. MEASURED: `authenticated` reaches zero privileged
+ *   roles by membership on the built template.
  *
  *   Each reachable role is reported WITH the reason codes that matched, so a
  *   control can assert which predicate did the catching. "It was refused" is

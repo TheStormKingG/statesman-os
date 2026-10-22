@@ -12,7 +12,7 @@ expect: caught
 proves: the production role guard's CREATEDB predicate has a control that names the reason it reported
 expect-test: CREATEDB: refuses a connection that can SET ROLE to a role holding CREATEDB
 
-file: src/server/db/privileged-role.ts
+file: tests/support/scoped-pg/privileged-role.ts
 count: 1
 @@FIND
     sql: (a) => `${a}.rolcreatedb`,

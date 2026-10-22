@@ -1,5 +1,5 @@
 /**
- * Unit: SQLSTATE -> error type -> HTTP status, in `src/server/db/errors.ts`.
+ * Unit: SQLSTATE -> error type -> HTTP status, in `tests/support/scoped-pg/errors.ts`.
  *
  * Pure logic, no database. `mapDatabaseError` is a total function from a thrown
  * value to a typed error, and every claim the module's comments make about it is
@@ -43,8 +43,8 @@ import {
   isRetryable,
   mapDatabaseError,
   publicMessageFor,
-} from '../../src/server/db/errors'
-import type { ErrorKind } from '../../src/server/db/errors'
+} from '../support/scoped-pg/errors'
+import type { ErrorKind } from '../support/scoped-pg/errors'
 
 /** A thrown value shaped like a `pg` error. `severity` is what `pg` sets. */
 function pgError(code: string, extra: { constraint?: string; severity?: string } = {}) {

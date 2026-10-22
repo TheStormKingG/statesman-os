@@ -26,13 +26,13 @@
  *     it cannot answer "were these two transactions concurrent?".
  *   - `readOwnTxWindow` + `windowsOverlap` give a second, privilege-free overlap
  *     proof: a backend always sees its own `pg_stat_activity` row in full
- *     (measured on this cluster as `statesman_app`), so `xact_start` and a
+ *     (measured on this cluster as `authenticated`), so `xact_start` and a
  *     closing `clock_timestamp()` bound each transaction's real lifetime.
  *
  * WHY THE OBSERVER IS A SEPARATE, PRIVILEGED psql CONNECTION
  * ----------------------------------------------------------
  * Two constraints meet here. First, `pg` may be imported only from
- * `src/server/db/**` (canon §6.1, enforced by `npm run boundaries`), so the
+ * `tests/support/scoped-pg/**` (canon §6.1, enforced by `npm run boundaries`), so the
  * harness cannot open its own driver connection — `db.ts` already talks to
  * Postgres through psql for this reason and this module does the same. Second,
  * V24: an unprivileged reader of `pg_stat_activity` is shown NULLs for
@@ -40,25 +40,27 @@
  * `db.ts` already uses for CREATE/DROP DATABASE.
  *
  * MEASURED REFINEMENT of that second reason, recorded because this file had it
- * wrong first: the restriction is ROLE-SCOPED. `statesman_app` sees another
- * `statesman_app` backend in FULL, including a live `Lock` wait, and sees only
+ * wrong first: the restriction is ROLE-SCOPED. `authenticated` sees another
+ * `authenticated` backend in FULL, including a live `Lock` wait, and sees only
  * NULLs for a backend of a different role. Both race parties here connect as
- * `statesman_app`, so the app role would have worked as the observer. The admin
- * role is used anyway because that visibility is a property of the parties'
- * roles, not of the instrument: a future test parking a migrator or owner
- * transaction would otherwise be told "never blocked", silently and in the
- * direction that reads healthy. `parkForeignRoleBackend` below lets the suite
- * assert both halves instead of arguing for either.
+ * `authenticated` (ADR-0015 §8.3), so the app role would have worked as the
+ * observer. The admin role is used anyway because that visibility is a property
+ * of the parties' roles, not of the instrument: a future test parking a
+ * `postgres` transaction would otherwise be told "never blocked", silently and
+ * in the direction that reads healthy. `parkForeignRoleBackend` below lets the
+ * suite assert both halves instead of arguing for either.
  *
  * That is a privileged connection in a test, which canon §8.3 otherwise forbids
- * — and the prohibition is about the DATA path: a superuser has BYPASSRLS, so a
- * tenancy assertion made over one passes without testing anything. This
- * observer reads `pg_catalog`/`pg_stat_activity` only; it never reads
- * `decision`, `decision_revision` or `app_user`, and every data read in the
- * suite still goes through `runAsUser` → the real `withUser` as
- * `statesman_app`. `observeBackends` takes the role as an argument precisely so
- * the suite can ALSO run the same read as the app role and assert V24 still
- * holds, which is what justifies the privileged observer instead of assuming it.
+ * — and the prohibition is about the DATA path. Post-port the reason is sharper
+ * than "a superuser has BYPASSRLS": so does Supabase's `postgres`, whose
+ * `rolsuper` is FALSE (ADR-0015, "the trap this introduces"), so a privileged
+ * connection no longer announces itself through `rolsuper` at all. This observer
+ * reads `pg_catalog`/`pg_stat_activity` only; it never reads `decision`,
+ * `decision_revision` or `public.profile`, and every data read in the suite
+ * still goes through `runAsUser` → `withUser` as `authenticated`.
+ * `observeBackends` takes the role as an argument precisely so the suite can
+ * ALSO run the same read as the app role and assert V24 still holds, which is
+ * what justifies the privileged observer instead of assuming it.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -70,7 +72,7 @@ import {
   runAsUser,
   workerDatabaseName,
 } from './db'
-import type { ScopedQueries } from '../../../src/server/db'
+import type { ScopedQueries } from '../../support/scoped-pg'
 
 /* ------------------------------------------------------------------ *
  * Rendezvous
@@ -391,27 +393,31 @@ export interface ForeignRoleBackend {
 }
 
 /**
- * Park a backend whose SESSION ROLE is not `statesman_app`, and return its pid.
+ * Park a backend whose SESSION ROLE is not `authenticated`, and return its pid.
  *
  * WHY THIS EXISTS. V24 reads "a non-privileged observer of `pg_stat_activity`
  * gets one row per pid with `state` and `wait_event_type` NULL", and this suite
  * first assumed that applied to any foreign pid. MEASURED, it does not: the
- * detail columns are ROLE-SCOPED, so `statesman_app` sees another
- * `statesman_app` backend in full — including a live `Lock` wait — and sees
+ * detail columns are ROLE-SCOPED, so `authenticated` sees another
+ * `authenticated` backend in full — including a live `Lock` wait — and sees
  * nothing for a backend of another role. Since both parties in every race here
- * connect as `statesman_app`, the app role would in fact have served as the
+ * connect as `authenticated`, the app role would in fact have served as the
  * observer; the instrument uses the admin role because that visibility is a
  * property of the PARTIES' roles rather than of the instrument, and a future
- * test that parked a migrator or owner transaction would otherwise be told
- * "never blocked" by a blind observer.
+ * test that parked a `postgres` transaction would otherwise be told "never
+ * blocked" by a blind observer.
  *
  * This helper makes that an observation rather than an argument: it produces a
  * foreign-role backend so the suite can read the same pid twice, once as each
  * role, and assert the asymmetry.
  *
- * The backend is `statesman_migrator` with `SET ROLE statesman_owner`, which is
- * the connection `ownerQuery` already uses for fixture DDL — no new connection
- * machinery, and no `pg` import.
+ * The backend is `postgres`, which is the connection `ownerQuery` already uses
+ * for fixture DDL — no new connection machinery, and no `pg` import. No
+ * `SET ROLE` is involved any more: the pre-port version connected as
+ * `statesman_migrator` and had to `SET ROLE statesman_owner`, because that role
+ * was `noinherit`; ADR-0015 §4.1 retires both and `postgres` owns every relation
+ * in `public` directly. `pg_stat_activity.usename` reports the SESSION role, so
+ * the discovery predicate below still sees a name that differs from `appRole()`.
  */
 export async function parkForeignRoleBackend(
   options: { readonly seconds?: number; readonly discoveryTimeoutMs?: number } = {},
@@ -535,7 +541,7 @@ export interface TxWindow {
 /**
  * Read this transaction's own window.
  *
- * MEASURED on this cluster: a backend connected as `statesman_app` sees its OWN
+ * MEASURED on this cluster: a backend connected as `authenticated` sees its OWN
  * `pg_stat_activity` row in full (`state='active'`, non-null `xact_start`),
  * even though V24's restriction hides those columns for other pids. So this
  * second overlap proof needs no privileged connection at all — which matters,
@@ -654,26 +660,58 @@ export function newId(): string {
 }
 
 /**
- * Seed an `app_user` row.
+ * Seed an identity: the `auth.users` row and then its `public.profile` row.
  *
- * Through `ownerQuery`, not `runAsMigrator`: MEASURED on this cluster, a
- * `statesman_migrator` connection that has not issued `SET ROLE` gets
- * `42501 permission denied for table app_user`, because 0000 creates the role
- * `noinherit` — membership in `statesman_owner` is reachable by SET ROLE but not
- * inherited (V3's mechanism, read in the other direction). `ownerQuery` issues
- * the `set role statesman_owner` that makes the insert legal, which is the same
- * path migration 0006 takes to seed its sentinel.
+ * Through `ownerQuery` (as `postgres`), and post-port the REASON HAS CHANGED even
+ * though the call has not. It used to be grant-absence plus a `noinherit`
+ * migrator role needing `SET ROLE`; ADR-0015 §4.1 retires those roles and
+ * 20261021140200 replaces `app_user` with `public.profile`, which
+ * `authenticated` CAN reach. What makes the owner connection necessary now is
+ * the row above it: `auth.users` is the platform's table, and
+ * scripts/emulate-supabase.sh grants `postgres` exactly `select, insert,
+ * references` on it while revoking everything from `public, anon, authenticated`
+ * (port finding P8). UPDATE and DELETE are withheld from `postgres` too, so this
+ * helper can create an identity and nothing in the harness can edit or remove
+ * one — on the live project that would be editing GoTrue's table.
  *
- * `app_user` is grant-protected rather than RLS-protected (§4.6), so no user
- * context is involved and no FORCE bracket is needed.
+ * No FORCE bracket is needed, and the post-port reason is different from the
+ * pre-port one: not "the table is grant-protected rather than RLS-protected",
+ * but that `postgres` is BYPASSRLS, so RLS does not apply to this connection at
+ * all. MEASURED: as `postgres`, with FORCE on and no claim set, a read of
+ * `public.decision` returns rows and raises nothing. A bracket would still be
+ * needed for a WRITE issued by a merely-owning role (V8).
  */
 export async function seedUser(userId: string = newId()): Promise<string> {
+  // PORTED FOR THE SUPABASE SHAPE (ADR-0015). `public.app_user` is retired: ADR-0002 goes
+  // with it and 20261021140200 replaces the three identity tables with `public.profile`,
+  // whose primary key `user_id` carries a REAL foreign key to `auth.users (id)` with
+  // ON DELETE RESTRICT. So an identity fixture now has to create the auth user FIRST —
+  // the chain is `decision -> profile -> auth.users` — and a fixture that forgets fails
+  // immediately rather than at the next posture run.
+  //
+  // No credential column is written at all. `encrypted_password` is nullable and NULL can
+  // never verify against anything, which is strictly stronger than the pre-port trick of
+  // storing a deliberately malformed argon2 encoding: this identity cannot be signed in
+  // as, by construction rather than by the hash being wrong. The address is at
+  // `.invalid` (RFC 2606) so no magic link or recovery mail can be delivered to it.
+  //
+  // Four columns, matching exactly what scripts/emulate-supabase.sh gives its minimal
+  // `auth.users`, so the local insert exercises the same column list a live one would.
+  // UNVERIFIED against project onpkspfxfmjkqpomcsse: the real `auth.users` is GoTrue's and
+  // carries many more columns, all nullable or defaulted as far as the published schema
+  // goes (port finding P5).
   await ownerQuery(
-    `insert into public.app_user (id, email, password_hash, algo_ver, created_at, updated_at)
-     values (:'uid'::uuid, :'email', '!not-a-hash:concurrency-fixture-cannot-authenticate', 1,
-             now(), now())
-     on conflict (id) do nothing`,
-    { uid: userId, email: `${userId}@concurrency.invalid` },
+    `insert into auth.users (id, email, created_at, updated_at)
+     values (:'uid'::uuid, :'email', now(), now())
+     on conflict (id) do nothing;
+     insert into public.profile (user_id, display_name, created_at, updated_at)
+     values (:'uid'::uuid, :'display', now(), now())
+     on conflict (user_id) do nothing`,
+    {
+      uid: userId,
+      email: `${userId}@concurrency.invalid`,
+      display: `concurrency fixture ${userId.slice(0, 8)}`,
+    },
   )
   return userId
 }
@@ -702,8 +740,8 @@ export async function createDraftDecision(userId: string, decisionId: string = n
  * `app.append_revision` entirely.
  *
  * This is the unguarded write of V23's negative control, and it is expressible
- * only because `statesman_app` genuinely holds `INSERT` on
- * `public.decision_revision` (migration 0003). No `FOR UPDATE` is taken and no
+ * only because `authenticated` genuinely holds `INSERT` on
+ * `public.decision_revision` (20261021140300). No `FOR UPDATE` is taken and no
  * row lock is acquired, which is exactly why two callers can read the same
  * `max(revision_no) + 1` and the follower can commit while the leader is still
  * open. Nothing in the application may do this; the control exists to show what
@@ -765,7 +803,7 @@ export async function readDecisionState(userId: string, decisionId: string): Pro
 
 /**
  * Take a row-level write lock on a decision's `draft_payload`, using the only
- * column `statesman_app` may update (§4.6b).
+ * column `authenticated` may update (§4.6b).
  *
  * `select ... for update` is NOT used: row locking requires UPDATE/DELETE
  * privilege and the app role's UPDATE is column-scoped, so the lock the

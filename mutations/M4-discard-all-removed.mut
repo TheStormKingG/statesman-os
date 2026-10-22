@@ -18,7 +18,7 @@ expect: caught
 proves: canon 7.6's pooled-identity-leak release blocker is controlled, on one proven-reused backend
 expect-test: a session GUC and a prepared statement planted in call 1 are GONE in call 2 on the SAME backend
 
-file: src/server/db/scoped.ts
+file: tests/support/scoped-pg/scoped.ts
 count: 1
 @@FIND
   try {

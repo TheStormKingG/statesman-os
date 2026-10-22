@@ -100,9 +100,22 @@ const names = failedAssertions.map((a) =>
     : [...(a.ancestorTitles ?? []), a.title ?? '<untitled>'].join(' '),
 )
 
-// The run produced results, so it did not abort before executing tests: an `#abort`
-// expectation can never be satisfied here.
-const missing = expected.filter((e) => e === '#abort' || !names.some((n) => n.includes(e)))
+// An `#abort` expectation is satisfied by a run that executed NO tests, whether or not
+// vitest managed to write a report skeleton first.
+//
+// MEASURED, and the reason this branch exists: MS2 weakens the decision tenancy policy,
+// which makes the sentinel migration's own paired control fail, so the template database
+// is never built and globalSetup throws. vitest still emitted a JSON report — but one
+// containing `tests=0 passed=0 failed=0 files_failed=0`. The earlier rule said "the run
+// produced results, so it did not abort", which is true of the FILE and false of the RUN,
+// and the gate reported MISATTRIBUTED for a mutation that was in fact caught earlier and
+// more strongly than any test could catch it.
+//
+// Zero executed tests is an abort. A report skeleton is not evidence that anything ran.
+const abortedInSubstance = total === 0 && failedAssertions.length === 0
+const missing = abortedInSubstance
+  ? expected.filter((e) => e !== '#abort')
+  : expected.filter((e) => e === '#abort' || !names.some((n) => n.includes(e)))
 emit('expected_match', expected.length > 0 && missing.length === 0 ? 1 : 0)
 for (const e of missing) emit('expected_missing', e)
 

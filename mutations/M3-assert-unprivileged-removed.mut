@@ -18,10 +18,10 @@ id: M3
 title: `await assertUnprivilegedOnce()` deleted from withUser's body
 expect: caught
 proves: the production role assertion (canon 6.1 step 1, V1/V3/V4) rejects BOTH an attribute-privileged and a membership-privileged role
-expect-test: refuses statesman_migrator, which a rolsuper/rolbypassrls-only predicate would pass
+expect-test: refuses `authenticator`, which an ATTRIBUTE-ONLY predicate would pass
 expect-test: refuses the cluster superuser, naming the SUPERUSER attribute
 
-file: src/server/db/scoped.ts
+file: tests/support/scoped-pg/scoped.ts
 count: 1
 @@FIND
 export async function withUser<T>(fn: (db: UserScopedClient) => Promise<T>): Promise<T> {

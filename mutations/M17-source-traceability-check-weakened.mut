@@ -28,7 +28,7 @@ expect: caught
 proves: FR-02 / PRD 8.1 source traceability is tested on the branch the seeded case never exercises
 expect-test: a non-fictional source without a uri or a retrieved date is rejected, and every seeded source is a dated fictional assumption
 
-file: migrations/0008_scenario_content.sql
+file: supabase/migrations/20261021140700_scenario_content.sql
 count: 1
 @@FIND
   constraint source_factual_is_traceable check (

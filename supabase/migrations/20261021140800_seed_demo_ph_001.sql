@@ -1,5 +1,13 @@
--- 0009 Seed the P0 training case: DEMO-PH-001, "A Regional Dengue Response Under
--- Uncertainty" (PRD Appendix A).
+-- 20261021140800 Seed the P0 training case: DEMO-PH-001, "A Regional Dengue Response
+-- Under Uncertainty" (PRD Appendix A).
+-- Ported from migrations/0009_seed_demo_ph_001.sql.
+--
+-- PORT NOTE: this file creates no table, function, policy or trigger, so the port touches
+-- only three things in it — the migrating role (`postgres` rather than `statesman_owner`),
+-- the identity accessor named in its prose, and SEED-CTRL-A/B, which measured a 28000 that
+-- `auth.uid()` no longer raises. The content, the editorial controls over it, and the
+-- SEED-1..SEED-7 integrity assertions are unchanged: they are claims about CONTENT, and
+-- the platform the content sits on does not alter them.
 --
 -- This file creates no table, no function, no policy and no trigger. It seeds reference
 -- rows into the five tables 0008 built, and it asserts — from the database, after the
@@ -15,19 +23,23 @@
 -- ===========================================================================
 -- The slice brief offers two ways to make reference content satisfy
 -- app.verify_security_posture(): a policy permitting read to any authenticated identity
--- while still mentioning app.require_user_id(), or an exemption row with a stated reason.
+-- while still mentioning auth.uid(), or an exemption row with a stated reason.
 -- 0008 took BOTH, for reasons it records at length, and this file ADDS NO TABLE, so it
 -- inherits that decision rather than making a new one. For the avoidance of doubt, the
 -- shape this content is now protected by is:
 --
 --   * THE POLICY, which is the operative control: `for select using
---     (app.require_user_id() is not null)` on all five tables. Read is permitted to any
---     authenticated identity and an UNAUTHENTICATED read raises 28000 rather than
---     returning rows. Not `using (true)`, so posture rule 8 passes on both of its tests.
---   * THE EXEMPTION ROWS, which waive posture rule 9 ONLY — rule 9's sentinel mechanism
---     is keyed on a `user_id` column and reference rows have no owner. Rule 1 is not
---     exemption-aware and still forces RLS plus a policy on all five, because
---     statesman_app holds SELECT.
+--     (auth.uid() is not null)` on all five tables. Read is permitted to any
+--     authenticated identity. PORT NOTE: a read with NO claim now returns ZERO ROWS and
+--     raises nothing, where `app.require_user_id()` raised 28000. Not `using (true)`, so
+--     posture rule 8 passes on both of its tests. The denial is still real; it is simply
+--     no longer self-announcing, which is why SEED-CTRL-A/B below were rewritten as a
+--     row-count pair measured as `authenticated`.
+--   * THE EXEMPTION ROWS, which now waive posture rule 2 ONLY. PORT NOTE: they used to
+--     waive rule 9 as well, leaving five protected tables with no enforced sentinel.
+--     20261021140700 registers all five in `public.posture_sentinel_row`, so rule 9b
+--     checks them on every migration run. Rule 1 is not exemption-aware and still forces
+--     RLS plus a policy on all five, because authenticated holds SELECT.
 --
 -- No posture rule is weakened here, and none is relied on implicitly: SEED-CTRL-A and
 -- SEED-CTRL-B below re-measure the denial and its positive control against THIS case's
@@ -143,7 +155,7 @@
 -- code and this is a content-integrity failure, not a security-posture failure, and
 -- overloading it would make a posture alert mean two different things.
 --
--- ST022 is raised only while a migration is running, as statesman_owner, never by the
+-- ST022 is raised only while a migration is running, as postgres, never by the
 -- application path — nothing the app can call reaches this file — so no mapping in
 -- src/server/db/errors.ts is owed for it. (ST020/ST021 are different: they are reachable
 -- at runtime and 0008 records their mapping as an owed follow-up. This file neither
@@ -152,11 +164,19 @@
 -- ===========================================================================
 -- V8 / V9 — THE SEED BRACKET
 -- ===========================================================================
--- The 0008 policies are `for select` only, so an owner INSERT under FORCE ROW LEVEL
--- SECURITY has no applicable policy and is refused outright, and an owner SELECT raises
--- 28000 with no identity context. Both halves matter here, because this file writes AND
--- reads back. So: NO FORCE on all five tables, insert, derive, assert, restore FORCE —
--- one bracket, closed in this file, re-measured from pg_catalog by SEED-CTRL-C.
+-- The reference policies are `for select` only, so an owner INSERT under FORCE ROW LEVEL
+-- SECURITY has no applicable policy and is refused outright, and an owner SELECT with no
+-- identity claim matches nothing. Both halves matter here, because this file writes AND
+-- reads back — and the read-back half is the dangerous one post-port: the owner's SELECT
+-- used to RAISE 28000, which announced the mistake, and now it returns zero rows, which
+-- an assertion would read as "nothing seeded" or, worse, as "nothing left behind".
+-- So: NO FORCE on all five tables, insert, derive, assert, restore FORCE — one bracket,
+-- closed in this file, re-measured from pg_catalog by SEED-CTRL-C.
+--
+-- PORT NOTE: as `postgres` (BYPASSRLS) none of the above applies — the role is outside
+-- RLS entirely. The bracket is kept so this file's correctness does not depend on the
+-- migrating role's rolbypassrls, which is the habit ADR-0015 names as the port's single
+-- most dangerous fact.
 --
 -- V7 — every count is asserted and no count is allowed to pass vacuously. Each row count
 -- is checked BOTH against the case body's own register length (so the rows and the body
@@ -226,12 +246,12 @@
 --    with the official figures is also the weaker instrument, without being told which is
 --    right. Recorded here and in content/README.md so case 2 uses the band the same way.
 -- ===========================================================================
-\set ON_ERROR_STOP on
-set role statesman_owner;
+set role postgres;
 
 -- ---------------------------------------------------------------------------
 -- The seed bracket opens. All five tables, because this file reads back what it writes
--- and an owner SELECT under FORCE raises 28000 with no identity context (V8/V9).
+-- and an owner SELECT under FORCE with no identity claim matches nothing (V8/V9) —
+-- silently, post-port, where it used to raise 28000.
 -- ---------------------------------------------------------------------------
 alter table public.scenario         no force row level security;
 alter table public.scenario_version no force row level security;
@@ -883,8 +903,9 @@ end $seed$;
 -- SEED-2 .. SEED-7 — the properties of the seeded case, read back from the rows.
 --
 -- Every check below is scoped to this case's scenario_version_id (V35's rule applied to a
--- migration), and runs inside the bracket because an owner SELECT under FORCE raises
--- 28000 with no identity context.
+-- migration), and runs inside the bracket because an owner SELECT under FORCE with no
+-- identity claim matches nothing — and post-port does so SILENTLY, so an assertion run
+-- outside the bracket would measure 0 and report success.
 -- ---------------------------------------------------------------------------
 do $assert$
 declare
@@ -1111,50 +1132,62 @@ alter table public.rubric_version   force row level security;
 -- instrument: a policy that stopped raising would now expose content a user actually
 -- reads, not a row labelled "reserved".
 --
--- A  (the denial)          no identity context -> 28000 from every reference table.
--- B  (the positive control) context set        -> the case reads back, with the claim
---                          count equal to the body's own register length.
+-- PORT NOTE — BOTH LEGS REWRITTEN. A measured that a claimless read RAISED 28000.
+-- `auth.uid()` returns NULL, so it now returns zero rows and raises nothing, and a probe
+-- catching 28000 would fail here for a reason that has nothing to do with this content.
 --
--- B is why A is not vacuous: `using (false)` or `using (require_user_id() is not null and
--- false)` would both pass A while making the case unreadable to every authenticated user
--- (V7: a failing qual affects zero rows and raises nothing). Runs as statesman_owner
--- under FORCE, so these reads go THROUGH the qual rather than around it by ownership
--- (V4/V8/V9). The context is restored explicitly (V17).
+-- A  (the denial)           no claim  -> 0 rows from every reference table, AND NO ERROR.
+-- B  (the positive control) a claim   -> the case reads back, with the claim count equal
+--                           to the body's own register length.
+--
+-- B is why A is not vacuous, and the port makes that dependency total rather than
+-- partial: `using (false)` would also pass A, and so would a missing grant, and so would
+-- an empty table (V7, V18). A no longer has a SQLSTATE to distinguish it, so B is the
+-- ONLY thing that establishes the five tables are readable at all.
+--
+-- RUNS AS `authenticated`, not as the migrating role. migrations/0009 ran these as
+-- `statesman_owner` and relied on FORCE to put the owner through the qual (V4/V8/V9). On
+-- Supabase the migrating role is `postgres`, which is BYPASSRLS and is NOT put through
+-- the qual by FORCE or anything else — the same block run as `postgres` would read every
+-- row on both legs and A would fail while the policy was perfectly correct. The claim
+-- GUCs are restored explicitly (V17) and the role is reset.
 -- ---------------------------------------------------------------------------
 do $ctrl$
 declare
   case_v    constant uuid := '00000000-0000-0000-0000-000000090003';
-  sentinel  constant uuid := '00000000-0000-0000-0000-00000000dead';
+  stranger  constant uuid := 'aaaaaaaa-0000-0000-0000-00000000beef';
   tables    constant text[] := array[
     'scenario','scenario_version','source','scenario_claim','rubric_version'];
-  prev_ctx  text := current_setting('app.current_user_id', true);
+  prev_sub    text := current_setting('request.jwt.claim.sub', true);
+  prev_claims text := current_setting('request.jwt.claims', true);
   t         text;
-  raised    boolean;
   n         integer;
   expected  integer;
   bad       text := '';
 begin
-  -- A: no context -> 28000 everywhere.
-  perform set_config('app.current_user_id', '', true);
+  execute 'set role authenticated';
+
+  -- A: no claim -> 0 rows everywhere, and no error. Note these tables are NOT empty by
+  -- this point: this file has just seeded a published case into them, so a zero here is a
+  -- denial over real content rather than the vacuous zero of an empty table.
+  perform set_config('request.jwt.claim.sub', '', true);
+  perform set_config('request.jwt.claims',    '', true);
   foreach t in array tables loop
-    raised := false;
     begin
-      execute format('select 1 from public.%I limit 1', t);
-    exception
-      when sqlstate '28000' then raised := true;
-      when others then
-        bad := bad || format(E'\n  SEED-CTRL-A %s raised %s (%s), expected 28000',
-                             t, sqlerrm, sqlstate);
-        raised := true;
-    end;
-    if not raised then
+      execute format('select count(*) from public.%I', t) into n;
+      if n <> 0 then
+        bad := bad || format(
+          E'\n  SEED-CTRL-A %s returned %s rows with NO identity claim, expected 0', t, n);
+      end if;
+    exception when others then
       bad := bad || format(
-        E'\n  SEED-CTRL-A %s returned instead of raising 28000 with no identity context', t);
-    end if;
+        E'\n  SEED-CTRL-A %s RAISED %s (%s) with no claim, where the live target returns '
+         '0 rows and raises nothing', t, sqlerrm, sqlstate);
+    end;
   end loop;
 
-  -- B: context set -> the case is readable THROUGH the policy, and complete.
-  perform set_config('app.current_user_id', sentinel::text, true);
+  -- B: a claim present -> the case is readable THROUGH the policy, and complete.
+  perform set_config('request.jwt.claim.sub', stranger::text, true);
   begin
     select jsonb_array_length(content -> 'claim_register') into expected
       from public.scenario_version where id = case_v;
@@ -1187,13 +1220,18 @@ begin
                          sqlerrm, sqlstate);
   end;
 
-  perform set_config('app.current_user_id', coalesce(prev_ctx, ''), true);
+  perform set_config('request.jwt.claim.sub', coalesce(prev_sub, ''), true);
+  perform set_config('request.jwt.claims',    coalesce(prev_claims, ''), true);
+  execute 'reset role';
 
   if bad <> '' then
-    raise exception 'the seeded case is not readable the way 0009 claims:%', bad
+    raise exception 'the seeded case is not readable the way this file claims:%', bad
       using errcode = 'ST022';
   end if;
 end $ctrl$;
+
+-- Unconditional, because a failure path inside the block above would leave the role set.
+set role postgres;
 
 -- ---------------------------------------------------------------------------
 -- SEED-CTRL-C — the bracket is closed, measured from pg_catalog rather than trusted.
@@ -1230,5 +1268,5 @@ end $restored$;
 -- cannot record a negative default and nothing prevents the next function from being
 -- PUBLIC-executable. Posture rule 4 is the gate; this is the statement it gates on.
 -- ---------------------------------------------------------------------------
-revoke execute on all functions in schema app    from public;
-revoke execute on all functions in schema public from public;
+revoke execute on all functions in schema app    from public, anon;
+revoke execute on all functions in schema public from public, anon, authenticated, service_role;
