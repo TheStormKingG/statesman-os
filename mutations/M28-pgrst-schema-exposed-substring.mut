@@ -1,0 +1,32 @@
+# M28 — app.pgrst_schema_exposed() weakened from exact membership to a substring test.
+#
+# THIS IS THE ONLY MUTATION IN THE SET THAT MAKES THE CODE LOOK BETTER. Every other entry
+# removes or neuters a guard in a way a reviewer would question; this one replaces a
+# string_to_array / unnest / btrim scan with a single LIKE and reads as a simplification.
+# It is also WRONG, in a direction that matters: a list naming `application` or `app_private`
+# would satisfy a query for `app`, so the rule would report the REST path healthy on a
+# project where schema `app` is not exposed at all and every submit answers PGRST106 — the
+# precise defect that shipped.
+#
+# It passes nine of the eleven cases in the membership test. The two it fails are the two
+# that exist for it. That asymmetry is the point: a case list without the substring traps
+# would accept this mutation and the test would look thorough while proving the weaker
+# property.
+#
+# This function is called from THREE places — rule E1, app.pgrst_schema_list_with(), and the
+# migration's own 1b block — so a single definition is also what stops those three from
+# drifting (canon 4.4's argument for one derivation function serving both the generated
+# column and the trigger).
+id: M28
+title: app.pgrst_schema_exposed() weakened from trimmed exact membership to a substring match
+expect: caught
+proves: the membership test discriminates `app` from `application` and `app_private`, so rule E1 cannot be satisfied by a schema that merely shares a prefix
+expect-test: [NFR-01] decides membership by trimmed exact match, never by substring
+
+file: supabase/migrations/20261022160000_expose_app_schema_to_postgrest.sql
+count: 1
+@@FIND
+      where btrim(s) = btrim(p_schema)
+@@REPLACE
+      where coalesce(p_recorded, '') like '%' || btrim(p_schema) || '%'
+@@END

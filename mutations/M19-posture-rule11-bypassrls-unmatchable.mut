@@ -1,3 +1,7 @@
+# PROMOTED 2026-10-22. Registered `expect: uncaught` with a todo; the gate then reported
+# PROMOTABLE — both named catchers exist in posture-controls.test.ts and both went red under
+# the mutation, measured. The todo is removed with the promotion rather than left behind,
+# because a satisfied todo that stays in the file is indistinguishable from an open one.
 # M19 — posture rule 11 (BYPASSRLS) made unmatchable.
 #
 # WHY THIS RULE IS THE PORT'S KEYSTONE. ADR-0015 removes two of the three layers that
@@ -31,8 +35,7 @@
 # baseline inventory.
 id: M19
 title: posture rule 11 (BYPASSRLS allowlist) made unmatchable by emptying the allowlist comparison
-expect: uncaught
-todo: promote to `expect: caught` once the baseline is green and both catchers are confirmed to resolve to exactly one test each. Probes D1/D2 passed by execution; the gate has never interpreted this entry.
+expect: caught
 proves: rule 11 fires for a role that is BYPASSRLS by ATTRIBUTE and for one that is BYPASSRLS by MEMBERSHIP (V3, V34)
 proves: the only wall left after ADR-0015 cannot be walked around by an unnamed role
 expect-test: [M19] raises ST099 for a BYPASSRLS role that can reach a table

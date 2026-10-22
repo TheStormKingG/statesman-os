@@ -138,7 +138,57 @@ grant anon, authenticated, service_role to authenticator;
 -- Supabase grants the three to `postgres` as well, which is what lets a migration
 -- `SET ROLE authenticated` to run a control as the unprivileged role. Our migration set
 -- uses exactly that to measure its own policies (CTRL-3/CTRL-4).
-grant anon, authenticated, service_role to postgres;
+--
+-- WITH ADMIN OPTION, and `authenticator` included. Both details were MEASURED on project
+-- onpkspfxfmjkqpomcsse rather than chosen, by reading pg_auth_members:
+--
+--   member    granted_role     admin_option
+--   postgres  anon             t
+--   postgres  authenticated    t
+--   postgres  authenticator    t
+--   postgres  service_role     t
+--
+-- The emulation previously granted three of the four and granted them WITHOUT admin
+-- option, and that gap was not cosmetic: 20261022160000 runs
+-- `alter role authenticator set pgrst.db_schemas = …` as `postgres`, which PostgreSQL 17
+-- permits only to a role with CREATEROLE *and* ADMIN OPTION on the target. The migration
+-- succeeded against the live project and failed here with
+--
+--   ERROR: permission denied to alter role
+--   DETAIL: Only roles with the CREATEROLE attribute and the ADMIN option on role
+--           "authenticator" may alter this role.
+--
+-- A local run that cannot do what the real project allows reports a fault in the migration
+-- when the fault is in the emulation. Matching the measured shape is the fix; loosening the
+-- migration would have been the bug.
+grant anon, authenticated, service_role, authenticator to postgres with admin option;
+
+-- PostgREST exposed schemas.
+--
+-- 20261022160000 exposes schema `app` so the lifecycle RPCs are reachable over REST, by
+-- running `alter role authenticator set pgrst.db_schemas = …`. That migration CANNOT do it
+-- here. `pgrst.db_schemas` is a custom GUC placeholder, which PostgreSQL 17 restricts to a
+-- superuser, and the emulated `postgres` is deliberately NOSUPERUSER. The live project's
+-- `postgres` is also NOSUPERUSER (rolsuper=f, measured) yet the statement SUCCEEDS there,
+-- because it holds `supabase_privileged_role` and authenticator preloads `supautils` —
+-- both measured, neither reproducible without the extension.
+--
+-- So this line stands in for that platform privilege, exactly as the BYPASSRLS allowlist
+-- of 20261022150000 stands in for platform roles the emulation has no way to create. The
+-- migration then takes its no-op branch locally and does the real work on the project.
+--
+-- WHAT THIS COSTS, SAID PLAINLY: posture rule E1 locally verifies a value THIS SCRIPT set,
+-- not one the migration set, so a local run cannot prove the ALTER ROLE statement works.
+-- That statement is verified against the live project by execution, and by the HTTP probe
+-- in scripts/verify-rest-exposure.sh. Everything around it — parsing the list, deciding
+-- membership, appending without overwriting, and rule E1's own verdict — lives in
+-- app.pgrst_schema_exposed() and app.pgrst_schema_list_with(), which are pure, callable and
+-- covered locally with positive controls. The uncovered surface is one statement, named.
+--
+-- The rejected alternative was granting the local `postgres` SUPERUSER so the migration
+-- could run unmodified. That is the V1/V34 mistake — a privileged role under test making
+-- every isolation check pass vacuously — and this project has already made it twice.
+alter role authenticator set pgrst.db_schemas = 'public, graphql_public, app';
 SQL
 
 echo "==> emulating database and schema ownership"

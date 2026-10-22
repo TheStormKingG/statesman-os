@@ -284,7 +284,26 @@ Resolution, now stated in the file: schema `app` is revoked from `public, anon` 
 Schema `public` names all four, which is safe *only* because this project creates no
 functions in `public` at all; if that changes, that list has the same hazard.
 
-### P4 — Supabase's stock default privileges grant `anon` ALL on new tables in `public`. **UNVERIFIED on the live project. Reproduced in the emulation deliberately.**
+### P4 — Supabase's stock default privileges grant `anon` ALL on new tables in `public`. **CONFIRMED on the live project 2026-10-22 by reading `pg_default_acl`.**
+
+**SETTLED.** `pg_default_acl` on `onpkspfxfmjkqpomcsse`, read as `postgres`:
+
+```
+public | r | postgres=arwdDxtm/supabase_admin anon=arwdDxtm/supabase_admin authenticated=arwdDxtm/supabase_admin service_role=arwdDxtm/supabase_admin
+public | S | postgres=rwU/supabase_admin      anon=rwU/supabase_admin      authenticated=rwU/supabase_admin      service_role=rwU/supabase_admin
+public | f | postgres=X/supabase_admin        anon=X/supabase_admin        authenticated=X/supabase_admin        service_role=X/supabase_admin
+```
+
+So the emulation did not overstate the hazard: tables, sequences **and functions** created
+in `public` are auto-granted to `anon`. Two consequences beyond the three controls below:
+
+* the `f` row is why "no function in `public` is callable by any client role" needs an
+  explicit revoke in every migration — it is fighting a live default, not tidying up. That
+  measurement is one of the two reasons ADR-0016 rejected moving the lifecycle entry points
+  into `public`;
+* **schema `app` has NO `pg_default_acl` entry of any kind**, so nothing in it is
+  auto-granted to anybody. That is why ADR-0016's rule E4 guards against a deliberate grant
+  rather than an automatic one, and it is the measured difference between the two schemas.
 
 A stock project ships
 `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon,
@@ -555,7 +574,7 @@ the next `mutation-check.sh` result is believed.
 
 ### Other follow-ups
 
-- Read `pg_default_acl` on the live project and settle finding P4 before the first push.
+- ~~Read `pg_default_acl` on the live project and settle finding P4 before the first push.~~ **DONE 2026-10-22**, by execution. P4 is CONFIRMED, not merely assumed; see P4 for the three rows read back and for the two consequences they carry.
 - Confirm the `auth.users` sentinel insert against the live project (P5). It fails loudly
   if wrong, so this is a scheduling question, not a safety one.
 - The client-side ST020/ST021 mapping (P11).

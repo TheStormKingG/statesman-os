@@ -1,0 +1,34 @@
+# M29 — rule 9b's REGISTRY-COLUMN check made unreachable.
+#
+# WHY THIS MUTATION EXISTS AT ALL: because M20 could not prove this branch, and said so.
+#
+# M20 replaces rule 9b's `if n <> 1 then` with `if false then`, disabling the sentinel COUNT
+# leg. Rule 9b has three branches and only one of them reads that count, so M20 named a
+# control it was never able to kill and the gate reported UNATTRIBUTED. Removing the name
+# from M20 without covering the branch would have been editing a catcher list until the gate
+# went green — the one move that makes the whole mechanism worthless. This is the cover.
+#
+# WHAT THE BRANCH IS FOR. `public.posture_sentinel_row` holds IDENTIFIERS, interpolated
+# through `format('%I')`. If a registered column stopped existing — a rename, a dropped
+# column — a rule that trusted the registry would raise 42703 from inside its own EXECUTE and
+# be reported as "sentinel rule could not be evaluated", which reads as a harness fault
+# rather than as a missing sentinel. So 9b checks the column against pg_attribute FIRST.
+#
+# `elsif false and not exists (...)` rather than deleting the branch: the mutation must be
+# unmatchable, not invalid, and the applier rejects an empty @@REPLACE (M22). With the branch
+# unreachable, a registry row naming a nonexistent column falls through to the counting
+# branch, whose EXECUTE then raises — so the control's own assertion that `rule9Broken` is
+# ABSENT is what goes red. That is the control working exactly as its comment says it should.
+id: M29
+title: rule 9b's registry-column catalog check made unreachable, so a stale registry row reports as a harness fault
+expect: caught
+proves: rule 9b validates the sentinel registry against pg_attribute before trusting it, so a renamed or dropped column is reported as a registry error and not as "could not be evaluated"
+expect-test: [M29] raises ST099 for a registry row naming a column that does not exist
+
+file: supabase/migrations/20261021140500_verify_security_posture.sql
+count: 1
+@@FIND
+      elsif not exists (select 1 from pg_attribute a
+@@REPLACE
+      elsif false and not exists (select 1 from pg_attribute a
+@@END

@@ -1,3 +1,25 @@
+# THIS MUTATION WAS INVALID, NOT UNMATCHABLE, AND THE GATE SAID SO. Registered with
+# `has_table_privilege('__never_a_role__', c.oid, p.priv)`, which is M6's defect exactly:
+# the role does not exist, so the function RAISES rather than returning false. That kills
+# app.verify_security_posture(), which runs at the end of every migration, so migrate.sh
+# failed, the template database was never built, globalSetup threw, and the gate reported
+#
+#     exit=1  tests=0 passed=0 failed=0   ->   UNATTRIBUTED
+#
+# Zero executed tests. The suite never had the chance to catch anything, and "the run went
+# red" was being read as evidence about rule 1b when it was evidence about the mutation.
+#
+# FIXED by naming a role that EXISTS and holds nothing, which is what "unmatchable" is
+# supposed to mean. MEASURED on statesman_test_template, reachable public tables by role:
+#
+#     anon 0 | authenticated 8 | service_role 0 | authenticator 0
+#
+# `authenticator` is the right choice and the measurement also settles the worry about it:
+# it is a MEMBER of `authenticated`, yet reaches 0 tables, because it is NOINHERIT and
+# has_table_privilege respects that. So it stays at 0 even after a control grants SELECT to
+# `anon`, and the mutated rule can never fire.
+#
+# The same trap caught M6 and was deliberately avoided in M25 for this reason.
 # M21 — posture rule 1b (`anon` HOLDS NOTHING) made unmatchable.
 #
 # WHY THIS IS THE NORMAL FAILURE HERE, NOT AN EXOTIC ONE. A stock Supabase project ships
@@ -25,15 +47,14 @@
 # Probe E1 in docs/supabase-port-notes.md §6 records this rule firing by execution when
 # `anon` is granted SELECT.
 #
-# NOTE ON WHAT IS STILL UNMEASURED: docs/supabase-target.md §1 measured roles, auth.uid(),
-# ownership and V2/V30 on the live project. It did NOT read pg_default_acl. The emulation
-# reproduces the MORE dangerous shape deliberately, so if the live project turns out not to
-# carry those defaults our controls are merely redundant — the safe direction to be wrong
-# in. Confirm with a pg_default_acl read before the first push.
+# SETTLED 2026-10-22 BY EXECUTION. pg_default_acl was read on the live project and finding
+# P4 is CONFIRMED, not assumed: `public|r|… anon=arwdDxtm …` plus the same for sequences and
+# for FUNCTIONS. The emulation did not overstate the hazard, so this rule is guarding a real
+# platform default rather than a hypothetical one. Schema `app`, by contrast, carries no
+# pg_default_acl entry at all — the measured difference ADR-0016 rule E4 relies on.
 id: M21
 title: posture rule 1b (`anon` holds nothing on any public table) made unmatchable
-expect: uncaught
-todo: promote to `expect: caught` once the baseline is green. Probe E1 passed by execution; the named catcher does not yet exist as a test and must be written. Also settle finding P4 by reading pg_default_acl on the live project.
+expect: caught
 proves: rule 1b catches the stock Supabase default ACL that grants anon ALL on new tables (port notes P4)
 expect-test: [M21] raises ST099 for anon granted SELECT on a public table
 
@@ -42,5 +63,5 @@ count: 1
 @@FIND
       and has_table_privilege('anon', c.oid, p.priv)
 @@REPLACE
-      and has_table_privilege('__never_a_role__', c.oid, p.priv)
+      and has_table_privilege('authenticator', c.oid, p.priv)
 @@END

@@ -231,6 +231,53 @@ Closing this gap means adding a Postgres service container plus the emulation to
 `pages.yml`. Until then, **do not enter real decisions into the deployed site.** ADR-0015
 states this as a release gate, not a quality measure.
 
+### And one thing no local gate can certify: that the REST surface is actually served
+
+`scripts/gates.sh` passes with no credentials and no network, which is what makes it
+runnable. The cost is that it cannot see the live project at all, and one property that
+matters only exists there.
+
+ADR-0016 exposes schema `app` to PostgREST so the lifecycle write path is reachable from the
+browser. Posture rule **E1** asserts that the setting is recorded in the database — and it
+reads `pg_roles.rolconfig`, so it proves what is *recorded*, not what PostgREST is *serving*.
+If the platform's own configuration ever took precedence, rolconfig would still name `app`,
+rule E1 would still pass, and every submit would answer `PGRST106`. That was the project's
+real state before ADR-0016, with a fully green gate run.
+
+One request settles it, and it carries its own positive control:
+
+```
+bash scripts/verify-rest-exposure.sh
+```
+
+It reads `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from the environment
+or from the gitignored `.env.supabase.local`. Both are publishable. It never reads the
+service role key.
+
+| It prints | Meaning |
+|---|---|
+| `42501` | **healthy.** Schema `app` is served and an anonymous caller is refused at the schema boundary, before any policy or function body |
+| `PGRST106` | the exposure is **missing** — the write path is dead |
+| `PGRST202` | the schema is admitted but its contents are not cached (`notify pgrst, 'reload schema'`) |
+
+Before grading any of that it asks PostgREST for a schema that does not exist, which **must**
+come back `PGRST106`. If it does not, the probe can no longer tell a missing exposure from a
+present one, so it exits non-zero saying so rather than reporting on the real request.
+
+**What it does not yet certify.** `42501` proves anonymous callers are refused. It does not
+prove a *signed-in* user can execute the lifecycle RPCs — a different claim, and unprovable
+until an account exists on the project. The catalogue says the chain is intact
+(`authenticated` holds `USAGE` on `app` and `EXECUTE` on the three entry points), but a
+privilege reading is not a round trip. Supply credentials and the script runs the second leg,
+which must come back `ST005` from inside the function body:
+
+```
+STATESMAN_PROBE_EMAIL=... STATESMAN_PROBE_PASSWORD=... bash scripts/verify-rest-exposure.sh
+```
+
+It calls `app.stamp_milestone` on an all-zeros decision id, which matches no row and writes
+nothing. Without credentials that leg prints **NOT RUN** and is never counted as a pass.
+
 ## 8. What is not deployed, and will not be
 
 - **Route Handlers and Server Actions.** `output: 'export'` forbids them. `src/app/api/`

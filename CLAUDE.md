@@ -1,12 +1,35 @@
 # CLAUDE.md — STATESMAN OS
 
-**Repo status: pre-implementation.** No `package.json`, no application code. Nothing here has been
-built, run, migrated or tested. Every command in §5 is PLANNED. Do not describe any part of this
-repository as working, verified, secure, tested or production-ready.
+**Repo status: slices 1 and 2 built; no screens.** This line was "pre-implementation. No
+`package.json`, no application code" and is corrected here because it was read first by every
+session and was false in three ways.
+
+Deliberately NOT an inventory of files or a test count — §8 says a sibling inventory is stale
+on arrival, and that is exactly how the previous version of this line became false. Three
+things that are durable and that an agent gets wrong by default:
+
+1. **The migration set is applied to a live Supabase project**, not only to the local
+   emulation, and both SQL gates pass there (`app.verify_security_posture()` / ST099 and
+   `app.verify_rest_exposure()` / ST097). Changes to `supabase/migrations/**` therefore have a
+   deployed consequence. ADR-0015 and ADR-0016 carry what that costs.
+2. **No screen exists.** Not Today, not the Decision Desk, not Challenge Review, Reflection or
+   History. A static shell is deployed; it renders no product surface on purpose.
+3. **No account has ever signed in.** No code path that reads a user's own rows has been
+   exercised end to end against the live project, so every claim about tenancy rests on the
+   integration suite and the mutation gate, which run against the emulation.
+
+For what is actually built right now, read `git log`, `package.json` and
+`reports/` — not a paragraph in this file.
+
+**The evidence rule is unchanged and matters more now, not less.** Do not describe any part of
+this repository as working, verified, secure, tested or production-ready without the command and
+its exit status alongside (§9). "The gates pass" is a claim about `scripts/gates.sh`, which runs
+with no credentials and no network; it is not a claim about the live project.
 
 **Canon.** `docs/superpowers/specs/2026-10-20-statesman-os-p0-mvp-design.md` (SOS-DESIGN-001) is the
-single source of truth; it carries 29 facts V1–V29 established by executing commands against this
-machine on 2026-10-20. `docs/PRD.md` (SOS-PRD-001 v1.0) holds FR-01–FR-19 and NFR-01–NFR-10 —
+single source of truth; it carries 36 facts V1–V36 established by executing commands — V1–V29
+against this machine on 2026-10-20, V30–V36 added by the Supabase port, several of them measured
+against the live project rather than the emulation. `docs/PRD.md` (SOS-PRD-001 v1.0) holds FR-01–FR-19 and NFR-01–NFR-10 —
 preserve those identifiers verbatim.
 
 This file is a behaviour patch, not a summary: it holds only what an agent gets wrong by default.
@@ -171,8 +194,14 @@ a bare `sh -c` may not carry it. Scripts therefore export PATH or call
 `/opt/homebrew/opt/postgresql@17/bin/<tool>` absolutely; never assume an inherited PATH. Node
 v25.5.0, npm 11.8.0 (canon §2). **Use npm** — no pnpm or yarn; bun present but unused.
 
-**npm scripts: none exist.** There is no `package.json`, so every script below is PLANNED and
-arrives with the first one. Do not invent further names; do not claim a script ran before it exists.
+**npm scripts exist.** `package.json` defines `dev`, `build`, `db:bootstrap`, `db:migrate`,
+`db:template`, `typecheck`, `lint`, `test:unit`, `test:integration`, `boundaries`, `gates`,
+`mutation` and `gates:fast`. Still: **do not invent further names, and do not claim a script ran
+before it exists.** Two checks are deliberately NOT npm scripts and are invoked by path, because
+they need the live project and credentials and so cannot sit inside a gate run that must work
+offline: `bash scripts/verify-rest-exposure.sh` (ADR-0016, documented in `docs/deployment.md` §7)
+and `npx supabase db push`.
+
 The CI order is fixed by canon §8.7 and is the contract these scripts implement:
 
 ```

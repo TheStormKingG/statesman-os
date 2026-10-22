@@ -1,0 +1,32 @@
+# M24 — posture rule E1 (the REST exposure is recorded) made unmatchable.
+#
+# WHY THIS IS THE MUTATION THAT MATTERS MOST IN THIS FILE. The defect rule E1 exists to
+# catch was REAL and was shipped: schema `app` was never added to the project's exposed
+# schemas, so `app.submit_decision`, `app.append_revision` and `app.stamp_milestone` — the
+# whole lifecycle write path, the only legal writer of `submitted_at` (canon 4.6b) — were
+# unreachable from the browser. MEASURED against onpkspfxfmjkqpomcsse as
+# `PGRST106 Invalid schema: app`, with the control that the same request without
+# `Content-Profile` answered a DIFFERENT code, PGRST202.
+#
+# The whole suite was green while that was true, because every integration test speaks to
+# Postgres directly and none crosses PostgREST. So this rule is the only thing in the
+# repository that can see the fault, and a rule nothing can prove fires is back to where we
+# started.
+#
+# `if false then` rather than a nonexistent role: M6 recorded that
+# `has_function_privilege('__never_a_role__', …)` RAISES, which kills the function and the
+# build and so is a mutation that is invalid rather than unmatchable.
+id: M24
+title: posture rule E1 (pgrst.db_schemas names schema app) made unmatchable
+expect: caught
+proves: rule E1 reports a missing REST exposure, which is the defect that shipped and that no other test in the suite can observe
+expect-test: [NFR-01] E1 fires when pgrst.db_schemas stops naming app
+expect-test: [NFR-01] E1 fires when pgrst.db_schemas is absent entirely, and says so
+
+file: supabase/migrations/20261022160000_expose_app_schema_to_postgrest.sql
+count: 1
+@@FIND
+  if not app.pgrst_schema_exposed(recorded, 'app') then
+@@REPLACE
+  if false then
+@@END

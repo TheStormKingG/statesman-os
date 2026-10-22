@@ -30,6 +30,18 @@ export type ErrorKind =
   | 'migrator_misuse'
   | 'configuration'
   | 'unknown_database'
+  // ── Supabase Auth (GoTrue) ────────────────────────────────────────────────
+  // A THIRD error source, alongside PostgreSQL SQLSTATEs and PostgREST codes.
+  // It is in this union rather than in a parallel one so `httpStatusFor`,
+  // `publicMessageFor` and `isRetryable` keep working for every error the
+  // application can produce; the classes themselves live in `auth-errors.ts`
+  // because this file is about the data boundary and GoTrue is not it.
+  | 'invalid_credentials'
+  | 'email_not_confirmed'
+  | 'signup_disabled'
+  | 'rate_limited'
+  | 'weak_password'
+  | 'unknown_auth'
 
 export interface StatesmanErrorInit {
   readonly message: string

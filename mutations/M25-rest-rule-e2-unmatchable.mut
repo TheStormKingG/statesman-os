@@ -1,0 +1,29 @@
+# M25 — posture rule E2 (anon and service_role hold no USAGE on schema app) made
+# unmatchable.
+#
+# Rule E2 is the measured reason exposing a schema is safe at all. With schema `app` served
+# by PostgREST, an anonymous request is refused at the SCHEMA boundary — observed end to
+# end as `HTTP 401 {"code":"42501","message":"permission denied for schema app"}` — before
+# any policy and before any function body. That is grant-absence, which canon 5.2 calls
+# strictly stronger than RLS. A single `grant usage on schema app to anon` would move the
+# refusal from "cannot enter" to "whatever each function happens to check".
+#
+# THE REPLACEMENT IS `authenticator`, A ROLE THAT EXISTS AND HOLDS NOTHING. MEASURED:
+# has_schema_privilege('authenticator','app','USAGE') = false. This is the M5 trick done
+# deliberately — M6 failed because its placeholder role did not exist and the predicate
+# raised, whereas a real role with no privilege makes the loop find nothing and the rule go
+# quiet, which is what "unmatchable" is supposed to mean.
+id: M25
+title: posture rule E2 (no client-role USAGE on schema app) made unmatchable
+expect: caught
+proves: rule E2 reports USAGE on an exposed schema being granted to a browser-reachable role
+expect-test: [NFR-02] E2 fires when anon is granted USAGE on schema app
+expect-test: [NFR-02] E2 fires when service_role is granted USAGE on schema app
+
+file: supabase/migrations/20261022160000_expose_app_schema_to_postgrest.sql
+count: 1
+@@FIND
+      from unnest(array['anon','service_role']) ro(rolname)
+@@REPLACE
+      from unnest(array['authenticator']) ro(rolname)
+@@END

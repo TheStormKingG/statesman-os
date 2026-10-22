@@ -30,9 +30,12 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// `collect` and `stripComments` are shared with the other source gate rather
+// than duplicated; see tests/unit/support/source-scan.ts for why.
+import { collect, stripComments } from './support/source-scan'
 
 const INTEGRATION_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'integration')
 
@@ -51,62 +54,6 @@ interface Violation {
   file: string
   line: number
   snippet: string
-}
-
-function collect(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...collect(p))
-    else if (entry.name.endsWith('.ts')) out.push(p)
-  }
-  return out
-}
-
-/**
- * Blank out comment bodies, preserving offsets and newlines so reported line numbers
- * stay correct.
- *
- * This is not cosmetic. The first version of this detector flagged three sites that were
- * all PROSE inside comments explaining this very bug — including the comment in
- * state-machine.test.ts that documents the fix. A detector that flags its own
- * documentation trains people to add opt-out markers to silence it, which is how a gate
- * decays into noise.
- */
-function stripComments(source: string): string {
-  let out = ''
-  let i = 0
-  let state: 'code' | 'line' | 'block' | 'single' | 'double' | 'tmpl' = 'code'
-  while (i < source.length) {
-    const c = source[i] ?? ''
-    const next = source[i + 1] ?? ''
-    if (state === 'code') {
-      if (c === '/' && next === '/') { state = 'line'; out += '  '; i += 2; continue }
-      if (c === '/' && next === '*') { state = 'block'; out += '  '; i += 2; continue }
-      if (c === "'") state = 'single'
-      else if (c === '"') state = 'double'
-      else if (c === '`') state = 'tmpl'
-      out += c; i += 1; continue
-    }
-    if (state === 'line') {
-      if (c === '\n') { state = 'code'; out += '\n' } else out += ' '
-      i += 1; continue
-    }
-    if (state === 'block') {
-      if (c === '*' && next === '/') { state = 'code'; out += '  '; i += 2; continue }
-      out += c === '\n' ? '\n' : ' '
-      i += 1; continue
-    }
-    // inside a string or template: copy verbatim, exit on the closing quote
-    if ((state === 'single' && c === "'") || (state === 'double' && c === '"') || (state === 'tmpl' && c === '`')) {
-      state = 'code'
-    } else if (c === '\\') {
-      out += c; i += 1
-      out += source[i] ?? ''; i += 1; continue
-    }
-    out += c; i += 1
-  }
-  return out
 }
 
 function findViolations(rawSource: string, file: string): Violation[] {

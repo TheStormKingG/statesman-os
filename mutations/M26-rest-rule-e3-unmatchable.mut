@@ -1,0 +1,27 @@
+# M26 — posture rule E3 (the executable set equals the registry) made unmatchable.
+#
+# Before 20261022160000 the executable surface of schema `app` was SIX functions, not the
+# three entry points: `current_user_id()`, `require_user_id()` and
+# `derive_decision_state(...)` are granted to `authenticated` by 20261021140100 lines
+# 147-149. Those three are deliberate and disclose nothing — two return the caller's own
+# identity, the third is IMMUTABLE and reads no table — but the number was discovered by
+# querying the live catalogue, because nothing asserted it anywhere.
+#
+# With the schema exposed, every one of those grants is an HTTP endpoint and a seventh
+# added carelessly becomes one silently. Rule E3 is what turns "we think there are six"
+# into a committed list with a reason per row. This mutation makes the unregistered-function
+# branch unreachable, which is what a reviewer "simplifying" the predicate would do by
+# accident.
+id: M26
+title: posture rule E3 (app functions executable by a client role must be registered) made unmatchable
+expect: caught
+proves: rule E3 reports a new app function granted to a client role without a reviewed registry entry
+expect-test: [NFR-02] E3 fires on an app function granted to a client role but unregistered
+
+file: supabase/migrations/20261022160000_expose_app_schema_to_postgrest.sql
+count: 1
+@@FIND
+       and not exists (select 1 from public.posture_rest_allow a where a.signature =
+@@REPLACE
+       and false and not exists (select 1 from public.posture_rest_allow a where a.signature =
+@@END

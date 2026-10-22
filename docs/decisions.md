@@ -46,7 +46,7 @@ reason the deliberate cuts below are recorded as decisions rather than omissions
 
 ---
 
-## 2. Requirements deferred against PRD intent
+## 2. Requirements expanded or deferred against PRD intent
 
 The PRD defers nothing in §11. These deferrals are therefore **ours**, and the PRD's text stands
 unaltered above them.
@@ -98,6 +98,52 @@ either record.
 **NFR-02 additionally carries open item O1:** encryption at rest has no mechanism — Postgres has
 no TDE. FileVault locally, a managed or encrypted volume on any deploy. Declared an open release
 item, not silently met (canon §9).
+
+---
+
+### D15 — The Decision Desk has fourteen fields, where PRD §5.2 lists ten — EXPANDED, not deferred
+
+**Decision:** the submission boundary (`src/lib/validation/decision.ts`) requires fourteen
+fields. PRD §5.2 specifies ten. All ten are present; three fields are additions and one PRD
+item is split in two.
+
+| PRD §5.2 item | Field | Note |
+|---|---|---|
+| objective | `objective` | |
+| options considered | `alternatives` | |
+| recommended action | `recommended_action` | |
+| lawful authority to verify | `lawful_authority` | |
+| resources / budget | `resources` | |
+| stakeholders and equity | `stakeholders` | |
+| risks | `risks` | |
+| uncertainty | `unknowns` | |
+| confidence (0–100%) | `confidence` | |
+| expected outcomes and indicators | `expected_outcomes` + `indicators` | **split in two** |
+| — | `assumptions` | **added** |
+| — | `rationale` | **added** |
+| — | `time_horizon` | **added** |
+
+**Why each addition.** `assumptions` is separated from `unknowns` because an assumption is
+something the user decided to treat as true and an unknown is something they did not;
+collapsing them loses the distinction the FR-07 challenge lenses exist to interrogate.
+`rationale` and `time_horizon` are already `NOT NULL` columns on `decision_revision`, so they
+are required fields whether or not a form shows them — and FR-05 asks for "a stated expected
+outcome **and** timeframe", which is why the timeframe cannot live inside the outcome prose.
+Splitting outcomes from indicators follows the same logic: an indicator is how you would
+know, which is a different answer from what you expect.
+
+**Why it is recorded at all.** `docs/ui-ux-design.md` §6.1 has specified fourteen fields since
+the design was approved, but nothing recorded them as a change to the PRD's ten, and **which
+fields are required is exactly what FR-03 and FR-05 are accepted against** (canon §12.2). An
+expansion that lives only in a design document reads, to anyone checking the FR table, as an
+implementation that asks for more than the requirement — or, worse, is where a PRD field
+quietly goes missing. `tests/unit/validation/decision.test.ts` therefore asserts the PRD §5.2
+ten are present as a separate test from the fourteen, so the design may expand the form but
+cannot drop something the PRD requires.
+
+**Not a licence to keep adding.** A fifteenth field needs its own line in this table and its
+own reason. The deep-equality key-set assertion in the test makes an unrecorded addition a
+test failure rather than a diff nobody noticed.
 
 ---
 

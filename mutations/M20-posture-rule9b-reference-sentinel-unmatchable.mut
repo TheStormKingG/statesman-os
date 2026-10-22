@@ -1,3 +1,23 @@
+# THE NAMED CATCHERS WERE STALE, AND THE GATE DISTINGUISHED THAT FROM A MISSING CONTROL.
+# Reported UNATTRIBUTED: the suite went red, but one named catcher did not fail while a test
+# this file never named did.
+#
+# This mutation replaces rule 9b's `if n <> 1 then` with `if false then`, which disables the
+# SENTINEL COUNT leg and nothing else. Rule 9b has three branches, and only two of them read
+# that count:
+#
+#   * "a reference sentinel deleted"                      -> counts rows   -> FAILS, correct
+#   * "counts the ROW, so re-pointing the registry does
+#      not satisfy it"                                    -> counts rows   -> FAILS, correct
+#   * "a registry row naming a column that does not
+#      exist"                                             -> validates the REGISTRY against
+#                                                            pg_attribute, never reaching the
+#                                                            count                -> unaffected
+#
+# So the third control was named in error. It is NOT dropped to make the gate green: the leg
+# it guards gets its own mutation, M29, so removing it from this list does not leave that
+# branch unproven. Editing a catcher list until the gate passes is the one move that would
+# make this whole mechanism worthless.
 # M20 — posture rule 9b (REFERENCE SENTINELS) made unmatchable.
 #
 # THE GAP THIS RULE CLOSED, WHICH IS WHY IT NEEDS ITS OWN CONTROL. The pre-port rule 9
@@ -27,11 +47,10 @@
 # measurement.
 id: M20
 title: posture rule 9b (reference-table sentinel count) made unfailable
-expect: uncaught
-todo: promote to `expect: caught` once the baseline is green. Probes C3/C4 passed by execution; the two named catchers do not yet exist as tests and must be written.
+expect: caught
 proves: rule 9b enforces the reference-table sentinels the pre-port rule 9 waived (V18, port notes 4)
 expect-test: [M20] raises ST099 for a reference sentinel deleted
-expect-test: [M20] raises ST099 for a registry row naming a column that does not exist
+expect-test: [M20] rule 9b counts the ROW, so re-pointing the registry does not satisfy it
 
 file: supabase/migrations/20261021140500_verify_security_posture.sql
 count: 1

@@ -378,7 +378,10 @@ const CONTROLS: readonly Control[] = [
   {
     name: 'a registry row naming a column that does not exist',
     rule: 'rule 9b SENTINELS — the registry is catalog-checked',
-    mutation: 'M20',
+    // M29, not M20. M20 disables rule 9b's sentinel COUNT leg, which this branch never
+    // reaches — it validates the REGISTRY against pg_attribute first. Tagging it M20 made it
+    // look proven by a mutation that cannot touch it.
+    mutation: 'M29',
     // The registry holds identifiers, interpolated through format('%I'). If a registered
     // column stopped existing — a rename, a dropped column — a rule that trusted the registry
     // would raise 42703 from inside its own EXECUTE and be reported as "could not be
@@ -393,7 +396,9 @@ const CONTROLS: readonly Control[] = [
   {
     name: 'a protected table with no user_id column at all',
     rule: 'rule 9b SENTINELS — unregistered is a failure, not a skip',
-    mutation: 'M20',
+    // M30, not M20, for the same reason: this is the `reg_col is null` branch and it never
+    // reaches the count leg either.
+    mutation: 'M30',
     // Canon section 4.8 warns that rules 1 and 2 must be column-name independent, because an
     // `attname='user_id'` selector misses an indirectly scoped table. Rules 9 and 10 cannot
     // be column-independent — they are ABOUT that column — so a protected table without one

@@ -88,3 +88,24 @@ if [[ $rc -ne 0 ]]; then
   exit $rc
 fi
 echo "posture OK"
+
+# ---------------------------------------------------------------------------
+# 4. The REST exposure check.
+# ---------------------------------------------------------------------------
+# A SECOND gate, not a second call to the same one. 20261022160000 exposes schema `app` to
+# PostgREST so the lifecycle RPCs are reachable from the browser at all; ST097 means that
+# surface is wrong (a setting or a grant), where ST099 means the schema is wrong (SQL).
+# Two SQLSTATEs because the two have different fixes.
+#
+# A gate reached only when the one above passes would hide a REST fault behind a schema
+# fault, so this runs unconditionally after it and has its own exit status. Every
+# app.verify_* function must be invoked here — tests/unit/verify-functions-invoked.test.ts
+# asserts exactly that, so a check added later cannot sit in the database uncalled.
+echo "==> app.verify_rest_exposure()"
+"${PSQL[@]}" -d "$DB" -qAt -c "set role postgres; select app.verify_rest_exposure();"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  echo "migrate: REST EXPOSURE POSTURE FAILED (psql exit $rc)" >&2
+  exit $rc
+fi
+echo "rest exposure OK"

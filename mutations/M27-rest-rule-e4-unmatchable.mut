@@ -1,0 +1,30 @@
+# M27 — posture rule E4 (no client-reachable relation in schema app) made unmatchable.
+#
+# THE HOLE THIS CLOSES IS SPECIFIC AND WAS OPENED BY THE EXPOSURE ITSELF. Exposing a schema
+# to PostgREST serves its TABLES AND VIEWS as REST collections, not only its functions. And
+# `app.verify_security_posture()` rule 1 — the rule that requires forced RLS and a policy on
+# anything `authenticated` can touch — scans schema `public` ONLY. So a table created in
+# `app` with a grant would be served over HTTP with no rule anywhere requiring a policy on
+# it.
+#
+# MEASURED, and it is why E4 guards against a deliberate grant rather than an automatic
+# one: `pg_default_acl` on the live project has entries for auth, extensions, graphql,
+# graphql_public, public, realtime and storage, and NONE for `app`. Nothing in `app` is
+# auto-granted to anybody, unlike `public`, where the stock default hands anon `arwdDxtm` on
+# every new table (V36).
+#
+# `relkind in ('X')` is not a valid relkind, so the scan matches nothing. It stays a legal
+# query — the mutation must be unmatchable, not invalid.
+id: M27
+title: posture rule E4 (no client-reachable relation in exposed schema app) made unmatchable
+expect: caught
+proves: rule E4 covers the gap left by posture rule 1 scanning public only, now that schema app is served over HTTP
+expect-test: [NFR-02] E4 fires on a client-reachable relation in schema app
+
+file: supabase/migrations/20261022160000_expose_app_schema_to_postgrest.sql
+count: 1
+@@FIND
+     where n.nspname = 'app' and c.relkind in ('r','p','v','m','f')
+@@REPLACE
+     where n.nspname = 'app' and c.relkind in ('X')
+@@END

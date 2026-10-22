@@ -1,0 +1,31 @@
+# M30 — rule 9b's UNREGISTERED branch made unreachable.
+#
+# The third of rule 9b's three branches, and the second one M20 was tagged against but could
+# not kill. Same reasoning as M29: the control existed, the mutation naming it could not
+# reach it, and the honest fix is a mutation per branch rather than a shorter catcher list.
+#
+# WHAT THE BRANCH IS FOR, and why it is the one that closed a real gap. Before the port, five
+# protected reference tables carried sentinel rows that NOTHING CHECKED — waived out of the
+# old rule 9 by an exemption row. A protected table with no `user_id` column and no
+# `posture_sentinel_row` entry was SKIPPED. That matters because an empty forced-RLS table
+# does not deny at all (V18): the policy qual is never evaluated, so a denial test over it
+# passes while proving nothing. Unregistered therefore has to be a FAILURE, not a skip, and
+# it is deliberately not waivable through `posture_exempt_table` any more.
+#
+# With the branch unreachable, such a table falls through to the counting branch, where
+# `format('%I', NULL)` produces an EXECUTE that cannot run — so the rule reports "could not
+# be evaluated" instead of naming the unregistered table, and the control's assertion on its
+# own fragment goes red.
+id: M30
+title: rule 9b's unregistered-table branch made unreachable, so a protected table with no sentinel is skipped rather than reported
+expect: caught
+proves: rule 9b treats an unregistered protected table as a failure rather than a skip, which is the gap the port closed and the reason an empty forced table cannot be relied on to deny (V18)
+expect-test: [M30] raises ST099 for a protected table with no user_id column at all
+
+file: supabase/migrations/20261021140500_verify_security_posture.sql
+count: 1
+@@FIND
+      elsif r.reg_col is null then
+@@REPLACE
+      elsif false and r.reg_col is null then
+@@END
