@@ -1,0 +1,28 @@
+# M34 — the audit detail key whitelist widened by one plausible-looking entry.
+#
+# THE EDIT A REVIEWER WOULD WAVE THROUGH. Adding `'text'` to a list of allowed keys reads
+# as making room for a message. What it actually removes is the only STRUCTURAL thing
+# keeping journal content out of the audit table.
+#
+# CLAUDE.md §6 forbids logging journal content, and three things enforce it: the functions
+# write ids and enum values, `authenticated` holds no INSERT grant, and this constraint
+# rejects any unexpected key. The first is a matter of whoever edits the functions next
+# remembering; the second stops clients but not definer functions; only the third survives
+# someone adding `jsonb_build_object('text', p_rationale)` to a writer in good faith.
+#
+# A rationale in an audit row would then be readable by every path that can read audit
+# history, including any future export, and would sit outside the append-only reasoning
+# that protects decision_revision — because nobody would be looking for journal text there.
+id: M34
+title: audit_event's detail key whitelist widened to admit a free-text key
+expect: caught
+proves: the detail column rejects unexpected keys at the schema, so journal text cannot reach the audit table even if a writer tries to put it there
+expect-test: [NFR-03] detail rejects any key outside the allowed set
+
+file: supabase/migrations/20261023080000_audit_event.sql
+count: 1
+@@FIND
+    detail - array['revision_id', 'revision_no', 'milestone', 'replayed']::text[]
+@@REPLACE
+    detail - array['revision_id', 'revision_no', 'milestone', 'replayed', 'text']::text[]
+@@END

@@ -1,4 +1,9 @@
-# RETARGETED 2026-10-22, AND THE REASON IS WORTH MORE THAN THE FIX.
+# RETARGETED TWICE: to 20261022170000 on 2026-10-22, then to 20261023080000 on
+# 2026-10-23 when the audit writes required another `create or replace`. Each move is
+# mechanical and each one is mandatory; the second was done in the same change as the
+# redefinition, which is the rule the first occurrence produced.
+#
+# THE ORIGINAL FAILURE, AND THE REASON IT IS WORTH MORE THAN THE FIX.
 #
 # This mutation pointed at 20261021140400, where both functions were first defined. It
 # applied cleanly there — `count: 1` matched, the edit landed — and the suite stayed GREEN,
@@ -64,7 +69,7 @@ proves: a SECURITY DEFINER body owned by a BYPASSRLS role gets no RLS for free, 
 proves: an idempotency replay cannot return another tenant's revision id
 expect-test: a cross-tenant replay never returns the other user
 
-file: supabase/migrations/20261022170000_decision_scenario_linkage.sql
+file: supabase/migrations/20261023080000_audit_event.sql
 count: 1
 @@FIND
   select dr.id, dr.revision_no into rid, n
@@ -76,7 +81,7 @@ count: 1
    where dr.idempotency_token = p_token;
 @@END
 
-file: supabase/migrations/20261022170000_decision_scenario_linkage.sql
+file: supabase/migrations/20261023080000_audit_event.sql
 count: 1
 @@FIND
   select dr.id, dr.revision_no into rid, existing

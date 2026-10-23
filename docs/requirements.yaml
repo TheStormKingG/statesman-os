@@ -19,7 +19,14 @@ meta:
   id: SOS-TRACE-001
   canon: SOS-DESIGN-001
   prd: SOS-PRD-001 v1.0
-  implementation_state: no application code exists; nothing in this register has been executed
+  implementation_state: >-
+    Slices 0 to 3 are built. The schema, row level security, the lifecycle state machine,
+    the scenario content, the scenario linkage, the audit trail, the validation boundary,
+    the auth layer, Today and the Decision Desk all exist and are exercised by the gate
+    suite. Slices 4 to 6 are not started. NOTHING HERE HAS BEEN USED BY A SIGNED-IN
+    PERSON: no account exists on the project, so every screen is unverified end to end
+    and the authenticated HTTP path to the lifecycle RPCs is unproven. This field is a
+    design statement, not a run outcome; run outcomes live only in reports/.
   status_vocabulary: [PLANNED, DEFERRED]
   status_is: a design property of scope, stable between runs
   run_outcome_vocabulary: [PASS, FAIL, NOT RUN]

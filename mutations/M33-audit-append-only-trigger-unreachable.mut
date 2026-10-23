@@ -1,0 +1,34 @@
+# M33 — audit_event's append-only trigger attached WHEN (false), so it never fires.
+#
+# WHY THE TRIGGER AND NOT THE GRANTS. `authenticated` holds SELECT on audit_event and
+# nothing else, so a client is stopped by the ABSENT GRANT and never reaches a trigger at
+# all. Grants do not bind the table OWNER, which is what migrations and definer functions
+# run as — V32 recorded `dr_no_update` raising ST001 for the owner too, and that property
+# is the only thing standing between a future migration and a quietly rewritten history.
+#
+# So this mutation is invisible to any test that only probes the client path: the 42501
+# legs keep passing, because the grant is untouched. It is caught solely by the leg that
+# probes as the owner, which is why that leg exists as a separate assertion rather than as
+# a second expectation inside the client one.
+#
+# `WHEN (false)` rather than dropping the trigger: the trigger still exists, still names
+# its function, and still appears in the catalogue, so a shape check counting triggers
+# would not notice either. M14 uses the same technique on the publish-immutability trigger
+# for the same reason.
+id: M33
+title: audit_event's append-only trigger attached WHEN (false), so UPDATE and DELETE by the owner are permitted
+expect: caught
+proves: audit history is append-only for the TABLE OWNER and not merely for clients, so a migration cannot rewrite it
+expect-test: [FR-16] the app role is stopped by the ABSENT GRANT, and the owner by the TRIGGER
+
+file: supabase/migrations/20261023080000_audit_event.sql
+count: 1
+@@FIND
+create trigger audit_no_update_delete
+  before update or delete on public.audit_event
+  for each row execute function app.audit_no_change();
+@@REPLACE
+create trigger audit_no_update_delete
+  before update or delete on public.audit_event
+  for each row when (false) execute function app.audit_no_change();
+@@END

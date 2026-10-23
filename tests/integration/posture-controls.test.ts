@@ -317,12 +317,24 @@ const CONTROLS: readonly Control[] = [
     //     would prove that rule 9 cannot fail.
     // FORCE and the triggers are restored BEFORE the posture call, so rules 1a, 2 and 7 see
     // the schema they expect and rule 9a is the only rule that can fire.
-    setup: `alter table public.decision          no force row level security;
+    // `audit_event` is deleted FIRST, and that ordering is the constraint talking.
+    // `audit_parent_fk` is ON DELETE RESTRICT, deliberately: canon §5.2 forbids a cascade
+    // that destroys the audit history NFR-03 requires, so deleting a decision that has
+    // history FAILS. MEASURED when 20261023080000 landed — this control stopped with
+    // 23503 "still referenced from table audit_event", which is the FK doing exactly its
+    // job. A third protected table means a third sentinel to clear, not a reason to
+    // weaken the key.
+    setup: `alter table public.audit_event       no force row level security;
+            alter table public.decision          no force row level security;
             alter table public.decision_revision no force row level security;
+            alter table public.audit_event       disable trigger user;
             alter table public.decision_revision disable trigger user;
+            delete from public.audit_event       where user_id = '${SENTINEL_USER_ID}';
             delete from public.decision_revision where user_id = '${SENTINEL_USER_ID}';
             delete from public.decision          where user_id = '${SENTINEL_USER_ID}';
+            alter table public.audit_event       enable  trigger user;
             alter table public.decision_revision enable  trigger user;
+            alter table public.audit_event       force row level security;
             alter table public.decision          force row level security;
             alter table public.decision_revision force row level security;`,
     probe: probeAsPostgres,
