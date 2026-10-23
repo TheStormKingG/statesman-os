@@ -762,3 +762,159 @@ dialog.confirm > * + * {
   padding: 12px 16px;
   max-width: 70ch;
 }
+
+/* ==================================================================== *
+ * Screen E — History and the evidence trail
+ * ==================================================================== */
+
+/* `docs/ui-ux-design.md` §9.1: a table at 768px and up. Below that a table is
+   the wrong component, so the same records render as plain blocks — not a
+   table with horizontal scroll and not a pinned first column. The switch is
+   done by rendering different markup, not by CSS alone: a `display: block`
+   table keeps its row/cell roles in the accessibility tree and would announce
+   as a table that no longer looks like one. */
+
+.record-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-block-start: 16px;
+}
+
+.record-table th,
+.record-table td {
+  text-align: start;
+  padding: 12px 12px 12px 0;
+  vertical-align: baseline;
+  /* §9.1: rules BETWEEN rows, not a border on the top and bottom of every one. */
+  border-block-end: 1px solid var(--divider);
+  border-radius: var(--radius-cell);
+}
+
+.record-table th {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+/* Sorting is real, so the control is a real button and aria-sort carries the
+   state. A caret that only looked sorted would be the decorative version. */
+.record-table th button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 500;
+  color: inherit;
+  cursor: pointer;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.record-table td.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.record-list {
+  list-style: none;
+  padding: 0;
+  margin-block-start: 16px;
+}
+
+.record-list > li {
+  padding-block: 16px;
+}
+
+.record-list > li + li {
+  border-block-start: 1px solid var(--divider);
+  margin-block-start: 0;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: end;
+  margin-block-start: 16px;
+}
+
+.filters label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  margin-block-end: 4px;
+}
+
+.filters select,
+.filters input {
+  min-height: 44px;
+  padding: 8px 10px;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 16px;
+}
+
+/* One hop of the trail. A hairline and space, never a nested card
+   (DESIGN.md §5: nested cards are never correct). */
+.hop {
+  padding-block: 20px;
+  border-block-start: 1px solid var(--divider);
+}
+
+.hop > * + * {
+  margin-block-start: 8px;
+}
+
+/* The identifiers each hop is pinned to (§9.2). Mono, wrapping rather than
+   truncated, because a half-shown uuid is worse than a wrapped one. */
+.pins {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.pins > span {
+  display: block;
+}
+
+/* ------------------------------------------------------------------ *
+ * The 768px switch, and the one visually-hidden utility
+ * ------------------------------------------------------------------ */
+
+/* §9.1 changes COMPONENT at 768px, not just styling: below it a table is the
+   wrong thing. Both markups are rendered and one is hidden, because a
+   `display: block` table keeps its table semantics in the accessibility tree
+   and would be announced as a table that no longer looks like one.
+   `display: none` removes the hidden one from that tree as well as from the
+   page, so exactly one is present to every consumer. */
+.only-wide { display: none; }
+.only-narrow { display: block; }
+
+@media (min-width: 48rem) {
+  .only-wide { display: block; }
+  .only-narrow { display: none; }
+}
+
+/* Available to assistive technology, absent from the visual layout. Not
+   `display: none`, which removes it from both. Used for the table caption,
+   which names the table for a screen reader where the heading above it already
+   does that job visually. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

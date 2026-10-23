@@ -176,6 +176,28 @@ export interface Database {
         Update: Record<string, never>
         Relationships: NoRelationships
       }
+      /**
+       * 20261023080000. NFR-03 actor/time metadata.
+       *
+       * `Insert` and `Update` are both `never`-shaped: `authenticated` holds
+       * SELECT and nothing else, and every row is written by a definer
+       * function. Declaring them empty means a call site that tries to write
+       * one gets a compile error rather than a 42501 at runtime.
+       */
+      audit_event: {
+        Row: {
+          id: string
+          user_id: string
+          actor_user_id: string | null
+          decision_id: string
+          action: string
+          detail: Json
+          occurred_at: string
+        }
+        Insert: Record<string, never>
+        Update: Record<string, never>
+        Relationships: NoRelationships
+      }
       scenario: {
         Row: {
           id: string

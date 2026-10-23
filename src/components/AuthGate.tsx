@@ -38,6 +38,7 @@
  * named error at the moment they first write.
  */
 
+import Link from 'next/link'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   currentIdentity,
@@ -115,8 +116,15 @@ export function AuthGate({
     <>
       <div className="site-head">
         <span className="meta-line">{state.identity.email ?? 'signed in'}</span>
+        {/*
+          next/link, not a bare anchor. next.config.ts keeps the Pages basePath in a
+          single constant precisely so it is not repeated, and a hand-written
+          `/statesman-os/...` here would be a second copy that a custom-domain move would
+          silently leave behind. Link prepends it.
+        */}
         <nav className="site-nav">
-          <a href="./">Today</a>
+          <Link href="/today/">Today</Link>
+          <Link href="/history/">History</Link>
           <button
             type="button"
             className="button button--quiet"
