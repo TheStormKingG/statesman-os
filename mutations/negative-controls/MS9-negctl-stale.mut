@@ -1,10 +1,20 @@
 # NEGATIVE CONTROL for the gate: the FIND text does not exist. The gate MUST report
 # NOT-APPLIED and exit 1 rather than reading the resulting suite status as evidence.
+#
+# `negative-control: true` is required and the incoherence it resolves is sharpest here:
+# this entry expects never to be applied, so demanding that it name a live test asks it to
+# carry a catcher for a run that cannot happen. See observation 0486.
+#
+# RE-POINTED 2026-10-23: the old target file `src/server/db/scoped.ts` no longer exists at
+# all, so the gate refused it for a MISSING FILE and not for the absent FIND text. Same
+# verdict, different mechanism — and the mechanism is the thing this control exists to
+# exercise. The file below is live; the FIND text below is not in it.
 id: MS9
 title: NEGATIVE CONTROL - a stale mutation whose target text is gone
 expect: caught
+negative-control: true
 expect-test: irrelevant
-file: src/server/db/scoped.ts
+file: src/lib/supabase/client.ts
 count: 1
 @@FIND
   await thisFunctionWasRenamedThreeRefactorsAgo()

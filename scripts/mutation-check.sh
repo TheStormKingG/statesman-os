@@ -206,6 +206,25 @@ fi
 # shellcheck disable=SC2086
 node "$LIB/mutation.mjs" validate $reg_files
 
+# `negative-control: true` waives the catcher-specificity check below. That check is what
+# stops an `expect-test:` matching nothing (or matching everything) from reading as CAUGHT,
+# so the waiver must never be reachable by a live mutation — otherwise the hole comes back
+# one header at a time and the report still says GATE PASSED.
+#
+# Confined by LOCATION, and checked against the SHIPPED registry on every run whatever
+# MUTATION_DIR says: a run pointed at the controls must still refuse a waiver that has
+# appeared in mutations/. Checking only the registry being run would exempt the shipped
+# set from scrutiny precisely when the controls are the thing being exercised.
+shipped_files=''
+for f in "$REPO"/mutations/MS*.mut "$REPO"/mutations/M[0-9]*.mut; do
+  if [ -e "$f" ]; then shipped_files="$shipped_files $f"; fi
+done
+if [ -n "${shipped_files// /}" ]; then
+  echo "==> asserting the shipped registry claims no specificity waiver"
+  # shellcheck disable=SC2086
+  node "$LIB/mutation.mjs" assert-shipped $shipped_files
+fi
+
 # ---------------------------------------------------------------------------
 # Lock, scratch space, and cleanup that runs even on failure.
 # ---------------------------------------------------------------------------
@@ -435,8 +454,22 @@ fi
 echo "    inventory  $INV_COUNT test name(s) recorded from the baseline"
 
 spec_bad=0
+spec_waived=0
 while IFS= read -r mf; do
   mid="$(field "$mf" id)"
+  # A DECLARED negative control is exempt — and only from this check. Its catcher names a
+  # test that does not exist, which is the property the control is built from, so the gate
+  # cannot both police it and keep the control runnable. The entry still runs, still
+  # applies, and still has to produce its recorded verdict; nothing else is waived.
+  #
+  # The exemption is declared on the entry, never inferred from the directory it sits in:
+  # a file can be moved, and an exemption that travels with a path is an exemption nobody
+  # reading the entry can see.
+  if [ "$(field "$mf" negative-control)" = 'true' ]; then
+    echo "    SPEC WAIVED  $mid: declared 'negative-control: true' (a control over the gate)"
+    spec_waived=$((spec_waived + 1))
+    continue
+  fi
   while IFS= read -r sub; do
     [ -z "$sub" ] && continue
     [ "$sub" = '#abort' ] && continue
@@ -457,7 +490,15 @@ if [ "$spec_bad" != 0 ]; then
   echo "one test. Fix the .mut files before trusting any verdict from this gate." >&2
   exit 2
 fi
-echo "    CATCHERS SPECIFIC — every expect-test resolves to exactly one baseline test."
+if [ "$spec_waived" = 0 ]; then
+  echo "    CATCHERS SPECIFIC — every expect-test resolves to exactly one baseline test."
+else
+  # Printed, and printed with a count, because the dangerous version of this change is the
+  # one that waives everything: a silent exemption and a working check are the same output.
+  echo "    CATCHERS SPECIFIC — every non-waived expect-test resolves to exactly one"
+  echo "    baseline test; $spec_waived declared negative control(s) waived. A waived entry"
+  echo "    must still produce its recorded verdict below."
+fi
 rm -rf "$BASE"
 
 if [ "$BASELINE_ONLY" = 1 ]; then

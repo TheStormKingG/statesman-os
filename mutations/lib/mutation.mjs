@@ -37,6 +37,14 @@
  *                                test results at all", i.e. globalSetup or the role guard
  *                                aborted the suite before any test ran.)
  *   todo: <reason>              (required when expect: uncaught)
+ *   negative-control: true      (optional; the ONLY accepted value is `true`. Declares
+ *                                this entry a control over the GATE rather than over the
+ *                                code: the gate waives its catcher-specificity check for
+ *                                it, because naming a test that does not exist is what
+ *                                such a control is built from. It waives nothing else —
+ *                                the entry still runs and still has to produce its
+ *                                recorded verdict. A declared control may never sit in
+ *                                the shipped registry; see assertNoDeclaredControls.)
  *   proves: <free text>         (optional, repeatable; printed in the report)
  *
  *   file: <repo-relative path>  (the file the next edit block touches)
@@ -60,7 +68,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, normalize, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const SINGLE_KEYS = ['id', 'title', 'expect', 'todo']
+const SINGLE_KEYS = ['id', 'title', 'expect', 'todo', 'negative-control']
 /**
  * `expect-test` is a LIST and every entry must be among the failures.
  *
@@ -221,6 +229,17 @@ export function parseMutation(path) {
   if (headers['expect'] === 'uncaught' && (headers['todo'] === undefined || headers['todo'] === '')) {
     throw new Error(`${path}: 'expect: uncaught' requires a 'todo:' saying what is missing`)
   }
+  // Exactly one spelling, and no `false`. This field switches a gate OFF, so a value the
+  // parser does not recognise must be an error and never a silent `false`: a control that
+  // believes it is exempt and is not fails the gate for the wrong reason, and a live
+  // mutation whose typo'd waiver is read as absent keeps a defect the field was added to
+  // make impossible. Both are quiet; an unknown value is loud.
+  if (headers['negative-control'] !== undefined && headers['negative-control'] !== 'true') {
+    throw new Error(
+      `${path}: 'negative-control:' must be 'true' or absent, got ` +
+        `'${headers['negative-control']}'. There is no 'false': omit the header.`,
+    )
+  }
   if (edits.length === 0) throw new Error(`${path}: no edits`)
 
   return {
@@ -230,6 +249,7 @@ export function parseMutation(path) {
     expect: headers['expect'],
     expectTests,
     todo: headers['todo'] ?? '',
+    negativeControl: headers['negative-control'] === 'true',
     proves,
     edits,
   }
@@ -299,6 +319,38 @@ export function applyMutation(mutation, root) {
   return applied
 }
 
+/**
+ * Refuse a declared negative control anywhere in the SHIPPED registry.
+ *
+ * `negative-control: true` waives the gate's catcher-specificity check, and that check is
+ * what closes a real false-CAUGHT hole: an `expect-test:` of a single character matched
+ * almost any failure, so the gate printed "CAUGHT" and "GATE PASSED" over a mutation whose
+ * catcher identified nothing. A waiver that any entry could claim would hand that hole
+ * back to every live mutation, one header at a time, and the resulting report would read
+ * exactly like a strong one.
+ *
+ * So the waiver is confined by WHERE the entry lives, checked independently of which
+ * registry is being run: the gate's own controls live in mutations/negative-controls/ and
+ * never run in CI, while mutations/ is the shipped registry whose verdicts are evidence
+ * about this codebase. A live mutation may not buy an exemption with a header.
+ */
+export function assertNoDeclaredControls(files) {
+  const offenders = []
+  for (const file of files) {
+    const m = parseMutation(file)
+    if (m.negativeControl) offenders.push(`${m.id} (${file})`)
+  }
+  if (offenders.length > 0) {
+    throw new Error(
+      "'negative-control: true' is not allowed in the shipped registry:\n" +
+        offenders.map((o) => `  ${o}`).join('\n') +
+        '\nA declared control waives catcher specificity, which is the check that stops a\n' +
+        'catcher matching nothing from reading as CAUGHT. Controls over the gate itself\n' +
+        'belong in mutations/negative-controls/, which is not globbed by the default run.',
+    )
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * CLI
  * ------------------------------------------------------------------ */
@@ -316,6 +368,8 @@ function main(argv) {
       // argument to vitest-summary.mjs, so a test title containing spaces stays intact.
       'expect-test': m.expectTests.join('\n'),
       todo: m.todo,
+      // 'true' / 'false' as text: the gate tests it with a string comparison in sh.
+      'negative-control': m.negativeControl ? 'true' : 'false',
       files: m.edits.map((e) => e.file).join(' '),
     }
     const value = table[field]
@@ -328,6 +382,11 @@ function main(argv) {
     const m = parseMutation(file)
     const applied = applyMutation(m, root)
     for (const line of applied) process.stdout.write('  applied: ' + line + '\n')
+    return
+  }
+  if (command === 'assert-shipped') {
+    assertNoDeclaredControls(rest)
+    process.stdout.write(`  ok ${String(rest.length)} shipped mutation(s) declare no waiver\n`)
     return
   }
   if (command === 'validate') {
@@ -348,7 +407,7 @@ function main(argv) {
     }
     return
   }
-  throw new Error('usage: mutation.mjs <field|apply|validate> ...')
+  throw new Error('usage: mutation.mjs <field|apply|validate|assert-shipped> ...')
 }
 
 // Run the CLI only when this file IS the entry point. lib/selftest.mjs imports
