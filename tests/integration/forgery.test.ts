@@ -79,6 +79,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ensureWorkerDatabase, ownerQuery, releaseProductionPools, runAsUser } from './support/db'
 import { PermissionDeniedError, StatesmanError } from '../support/scoped-pg'
 import { SENTINEL_USER_ID } from './support/sentinels'
+import { freshScenarioVersion } from './support/scenario-fixtures'
 
 // ---------------------------------------------------------------------------
 // Identities and fixed ids
@@ -127,16 +128,28 @@ const PARENT_FK = 'dr_parent_fk'
 // Literal SQL. Text is constant; every value is a parameter.
 // ---------------------------------------------------------------------------
 
+// $4 is the scenario version. `decision_one_open_draft_per_scenario` permits ONE open
+// draft per user per case (20261022170000), and this file seeds more than one draft for
+// the same user, so each needs its own case. The product rule, not a workaround.
 const INSERT_DECISION =
-  'insert into public.decision (id, user_id, draft_payload) ' +
-  'values ($1::uuid, $2::uuid, $3::jsonb)'
+  'insert into public.decision (id, user_id, draft_payload, scenario_version_id) ' +
+  'values ($1::uuid, $2::uuid, $3::jsonb, $4::uuid)'
 
+// `scenario_version_id` is $11, and every call site passes the PARENT decision's value.
+// Neither obvious alternative works here. A hard-coded literal breaks the moment the
+// parents get their own cases (they do, so that one user can hold several open
+// drafts): dr_scenario_fk then rejects the row with 23503 BEFORE the WITH CHECK runs,
+// and these tests would be asserting the wrong refusal. A subquery over the parent is
+// worse: in the cross-tenant cases it runs under B's RLS, cannot see A's decision,
+// yields NULL, and a NOT NULL violation replaces the 42501 the test exists to prove.
+// Passing the value explicitly keeps the FK satisfied so that the POLICY is what
+// rejects the forgery, which is the claim.
 const INSERT_REVISION =
   'insert into public.decision_revision ' +
   '  (id, decision_id, user_id, revision_no, content, confidence, ' +
-  '   forecast, horizon, rationale, idempotency_token) ' +
+  '   forecast, horizon, rationale, idempotency_token, scenario_version_id) ' +
   'values ($1::uuid, $2::uuid, $3::uuid, $4::int, $5::jsonb, $6::smallint, ' +
-  '        $7, $8, $9, $10::uuid)'
+  '        $7, $8, $9, $10::uuid, $11::uuid)'
 
 const COUNT_REVISION_BY_ID =
   'select count(*)::int as n from public.decision_revision where id = $1::uuid'
@@ -157,7 +170,20 @@ function revisionParams(
   userId: string,
   revisionNo: number,
   token: string,
-): readonly [string, string, string, number, string, number, string, string, string, string] {
+  /**
+   * Defaults to the case the NAMED PARENT was seeded against, derived from
+   * `decisionId` rather than defaulting to A's.
+   *
+   * dr_scenario_fk requires (decision_id, scenario_version_id) to resolve to a real
+   * `decision` row, so a revision aimed at B's parent carrying A's case is rejected
+   * with 23503 before anything this file is testing can happen. Deriving it here
+   * means no call site can get the pairing wrong; passing it explicitly is still how
+   * a test would deliberately construct a MISMATCH.
+   */
+  scenarioVersionId?: string,
+): readonly [
+  string, string, string, number, string, number, string, string, string, string, string,
+] {
   return [
     id,
     decisionId,
@@ -169,8 +195,20 @@ function revisionParams(
     HORIZON,
     RATIONALE,
     token,
+    scenarioVersionId ??
+      (decisionId === B_DECISION_ID ? parentScenarioVersionIds.b : parentScenarioVersionIds.a),
   ]
 }
+
+/**
+ * The cases the two parent decisions were seeded against, filled in by `beforeAll`.
+ *
+ * Mutable module state in a test file is usually a smell. It is the honest shape here:
+ * the ids are allocated by the database at seed time, every revision in this file has to
+ * carry its parent's case for dr_scenario_fk to be satisfied, and `revisionParams` is
+ * called from inside the tests rather than from the hook that learns them.
+ */
+const parentScenarioVersionIds: { a: string; b: string } = { a: '', b: '' }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -244,6 +282,10 @@ beforeAll(async () => {
     { a: USER_A, b: USER_B },
   )
 
+  // One case per parent, so that each user's parent is its own open draft.
+  parentScenarioVersionIds.a = await freshScenarioVersion('forgery-a-parent')
+  parentScenarioVersionIds.b = await freshScenarioVersion('forgery-b-parent')
+
   // Both parents go in through the real withUser, as their own owner, under the
   // real INSERT policy — so a missing or mis-scoped INSERT policy surfaces here
   // rather than being bypassed by a privileged fixture.
@@ -253,6 +295,7 @@ beforeAll(async () => {
       A_DECISION_ID,
       USER_A,
       JSON.stringify({ draft: 'a-parent' }),
+      parentScenarioVersionIds.a,
     ])
   })
   await runAsUser(USER_B, async (db) => {
@@ -261,6 +304,7 @@ beforeAll(async () => {
       B_DECISION_ID,
       USER_B,
       JSON.stringify({ draft: 'b-parent' }),
+      parentScenarioVersionIds.b,
     ])
   })
 })
@@ -520,10 +564,13 @@ describe('forgery', () => {
   //    agent's file for the half of the pair it is named after.
   // -------------------------------------------------------------------------
   it("[FR-19] B inserting a decision under A's user_id is rejected with 42501, and A can insert the identical row", async () => {
-    const forged: readonly [string, string, string] = [
+    // A's own case, distinct from the one seeded in beforeAll: the positive control below
+    // inserts this row as A, which would be A's SECOND open draft.
+    const forged: readonly [string, string, string, string] = [
       FORGED_DECISION_ID,
       USER_A,
       JSON.stringify({ forged: true }),
+      await freshScenarioVersion('forgery-forged'),
     ]
 
     expect(await countAs(USER_A, COUNT_DECISION_BY_ID, FORGED_DECISION_ID)).toBe(0)

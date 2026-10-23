@@ -57,6 +57,7 @@ import {
   runAsUser,
 } from './support/db'
 import { assertSentinelIntegrity } from './support/sentinels'
+import { freshScenarioVersion } from './support/scenario-fixtures'
 
 /* ------------------------------------------------------------------ *
  * Shapes read back from the database
@@ -89,7 +90,8 @@ const READ_DECISION_SQL =
   'from public.decision where id = $1::uuid'
 
 const INSERT_DECISION_SQL =
-  'insert into public.decision (user_id, draft_payload) values ($1::uuid, $2::jsonb) returning id'
+  'insert into public.decision (user_id, draft_payload, scenario_version_id) ' +
+  'values ($1::uuid, $2::jsonb, $3::uuid) returning id'
 
 const UPDATE_DRAFT_SQL =
   'update public.decision set draft_payload = $2::jsonb where id = $1::uuid'
@@ -251,14 +253,29 @@ async function seedUser(): Promise<string> {
   return id
 }
 
+/**
+ * Seed one draft.
+ *
+ * Each call gets its OWN scenario version by default, because
+ * `decision_one_open_draft_per_scenario` permits one open draft per user per case
+ * (20261022170000). Several tests in this file seed a draft for the same user, and
+ * sharing one case between them would collide with 23505 — correctly, since the
+ * product forbids a user holding two open drafts for one case.
+ *
+ * `scenarioVersionId` is overridable for the tests that need two drafts to share a
+ * case deliberately.
+ */
 async function seedDraft(
   userId: string,
   payload: Record<string, unknown> = { title: 'fixture draft' },
+  scenarioVersionId?: string,
 ): Promise<string> {
+  const svid = scenarioVersionId ?? (await freshScenarioVersion('lifecycle'))
   return runAsUser(userId, async (db) => {
     const row = await db.queryOne<{ id: string }>(INSERT_DECISION_SQL, [
       db.userId,
       JSON.stringify(payload),
+      svid,
     ])
     return row.id
   })

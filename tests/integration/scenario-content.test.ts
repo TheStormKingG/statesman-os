@@ -121,6 +121,7 @@ import {
   runAsUser,
 } from './support/db'
 import { assertSentinelIntegrity } from './support/sentinels'
+import { SEEDED_SCENARIO_VERSION_ID } from './support/scenario-fixtures'
 
 /* ------------------------------------------------------------------ *
  * The seeded case. Ids are literals from migration 0009, not discovered at runtime:
@@ -257,7 +258,8 @@ const UPDATE_REVISION_SQL =
   'update public.decision_revision set rationale = $2::text where id = $1::uuid'
 
 const INSERT_DECISION_SQL =
-  'insert into public.decision (user_id, draft_payload) values ($1::uuid, $2::jsonb) returning id'
+  'insert into public.decision (user_id, draft_payload, scenario_version_id) ' +
+  `values ($1::uuid, $2::jsonb, '${SEEDED_SCENARIO_VERSION_ID}'::uuid) returning id`
 
 /* The write attempts the app role must not be able to make. */
 const APP_INSERT_CLAIM_SQL =

@@ -48,3 +48,9 @@ supabase/.temp/
 # every `tsc` run, so tracking it makes a modified file appear in `git status` after any
 # typecheck and puts build churn in every diff. Nothing reads it but tsc, and tsc rebuilds it.
 tsconfig.tsbuildinfo
+
+# Volatile run output. CLAUDE.md §9: PASS, FAIL and NOT RUN are outcomes of an execution
+# and belong ONLY here, never in a committed document. Ignored BEFORE anything writes to
+# it, rather than in the change that first does, because the failure this prevents is a
+# run status being committed once and then read later as if it were still true.
+reports/

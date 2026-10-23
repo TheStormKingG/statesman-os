@@ -1,3 +1,21 @@
+# RETARGETED 2026-10-22, AND THE REASON IS WORTH MORE THAN THE FIX.
+#
+# This mutation pointed at 20261021140400, where both functions were first defined. It
+# applied cleanly there — `count: 1` matched, the edit landed — and the suite stayed GREEN,
+# so the gate reported ESCAPED: a guard marked as controlled that is not controlled.
+#
+# Nothing was wrong with the guard. 20261022170000 redefines BOTH functions with
+# `create or replace` to pin the scenario version, and migrations run in lexical order, so
+# the mutated definition from 140400 was overwritten by the unmutated one from 170000
+# before any test ran. The mutation was editing dead text.
+#
+# THE GENERAL HAZARD, for whoever redefines a function next: a `create or replace` in a
+# later migration silently invalidates every mutation that targets the earlier definition.
+# The mutation keeps applying, keeps reporting a match, and stops testing anything. The
+# only reason this was caught is that the gate distinguishes ESCAPED from CAUGHT rather
+# than grading on whether the suite went red — re-point the mutations in the same change
+# that redefines the function.
+#
 # M18 — the owner predicate removed from BOTH idempotency lookups.
 #
 # THE LEAK THIS PREDICATE PREVENTS, MEASURED IN BOTH DIRECTIONS (port notes P1).
@@ -46,7 +64,7 @@ proves: a SECURITY DEFINER body owned by a BYPASSRLS role gets no RLS for free, 
 proves: an idempotency replay cannot return another tenant's revision id
 expect-test: a cross-tenant replay never returns the other user
 
-file: supabase/migrations/20261021140400_lifecycle_functions.sql
+file: supabase/migrations/20261022170000_decision_scenario_linkage.sql
 count: 1
 @@FIND
   select dr.id, dr.revision_no into rid, n
@@ -58,7 +76,7 @@ count: 1
    where dr.idempotency_token = p_token;
 @@END
 
-file: supabase/migrations/20261021140400_lifecycle_functions.sql
+file: supabase/migrations/20261022170000_decision_scenario_linkage.sql
 count: 1
 @@FIND
   select dr.id, dr.revision_no into rid, existing

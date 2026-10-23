@@ -73,6 +73,7 @@ import {
   workerDatabaseName,
 } from './db'
 import type { ScopedQueries } from '../../support/scoped-pg'
+import { freshScenarioVersion } from './scenario-fixtures'
 
 /* ------------------------------------------------------------------ *
  * Rendezvous
@@ -724,12 +725,18 @@ export async function seedUser(userId: string = newId()): Promise<string> {
  * is used for the owner column rather than the caller's argument, so the row is
  * stamped with the identity the policy will actually enforce.
  */
+// A FRESH case per draft. The concurrency instruments deliberately lock two DIFFERENT
+// rows owned by the same user, and `decision_one_open_draft_per_scenario` permits one
+// open draft per user per case (20261022170000), so two drafts for one user must be two
+// cases. Allocated inside the helper so no caller has to know.
 export async function createDraftDecision(userId: string, decisionId: string = newId()): Promise<string> {
+  const scenarioVersionId = await freshScenarioVersion('concurrency')
   await runAsUser(userId, async (db) => {
     await db.queryAffectingOne(
-      `insert into public.decision (id, user_id, draft_payload)
-       values ($1::uuid, $2::uuid, $3::jsonb)`,
-      [decisionId, db.userId, JSON.stringify({ fixture: 'concurrency', decisionId })],
+      `insert into public.decision (id, user_id, draft_payload, scenario_version_id)
+       values ($1::uuid, $2::uuid, $3::jsonb, $4::uuid)`,
+      [decisionId, db.userId, JSON.stringify({ fixture: 'concurrency', decisionId }),
+       scenarioVersionId],
     )
   })
   return decisionId
@@ -759,9 +766,10 @@ export async function insertRevisionUnguarded(
   await db.queryAffectingOne(
     `insert into public.decision_revision
        (decision_id, user_id, revision_no, content, confidence,
-        forecast, horizon, rationale, idempotency_token)
+        forecast, horizon, rationale, idempotency_token, scenario_version_id)
      values ($1::uuid, $2::uuid, $3::int, $4::jsonb, $5::smallint,
-             $6::text, $7::text, $8::text, $9::uuid)`,
+             $6::text, $7::text, $8::text, $9::uuid,
+             (select d.scenario_version_id from public.decision d where d.id = $1::uuid))`,
     [
       input.decisionId,
       db.userId,

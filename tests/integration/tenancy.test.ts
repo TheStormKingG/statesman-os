@@ -89,6 +89,7 @@ import {
   assertSentinelIntegrity,
 } from './support/sentinels'
 import { PermissionDeniedError, StatesmanError, submitDecision } from '../support/scoped-pg'
+import { freshScenarioVersion } from './support/scenario-fixtures'
 
 // ---------------------------------------------------------------------------
 // Identities and fixed ids
@@ -133,8 +134,12 @@ const READ_DRAFT =
   'from public.decision where id = $1::uuid'
 const UPDATE_DRAFT =
   'update public.decision set draft_payload = $1::jsonb where id = $2::uuid'
+// $4 is the scenario version. `decision_one_open_draft_per_scenario` permits ONE open
+// draft per user per case (20261022170000), and this file seeds more than one draft for
+// the same user, so each needs its own case. The product rule, not a workaround.
 const INSERT_DECISION =
-  'insert into public.decision (id, user_id, draft_payload) values ($1::uuid, $2::uuid, $3::jsonb)'
+  'insert into public.decision (id, user_id, draft_payload, scenario_version_id) ' +
+  'values ($1::uuid, $2::uuid, $3::jsonb, $4::uuid)'
 /**
  * The identity, read BOTH ways, in one statement.
  *
@@ -307,17 +312,28 @@ beforeAll(async () => {
   // Both of A's decisions go in through the real withUser, as A, under the real
   // INSERT policy. `queryAffectingOne` turns a WITH CHECK failure's silent
   // zero-row outcome into an error (V7).
+  // Allocated BEFORE the user transaction opens, and that ordering is load-bearing.
+  // freshScenarioVersion() runs ALTER TABLE on public.scenario_version on its own
+  // connection, which needs ACCESS EXCLUSIVE. An insert into public.decision takes a
+  // ROW SHARE lock on scenario_version through the FK, so calling it from inside an open
+  // runAsUser transaction that has already inserted deadlocks: the ALTER waits for the
+  // transaction and the transaction waits for the ALTER. MEASURED as a 120s hook timeout.
+  const caseSubmitted = await freshScenarioVersion('tenancy-a-submitted')
+  const caseDraft = await freshScenarioVersion('tenancy-a-draft')
+
   await runAsUser(USER_A, async (db) => {
     expect(db.userId).toBe(USER_A)
     await db.queryAffectingOne(INSERT_DECISION, [
       A_SUBMITTED_ID,
       USER_A,
       JSON.stringify({ draft: 'a-submitted' }),
+      caseSubmitted,
     ])
     await db.queryAffectingOne(INSERT_DECISION, [
       A_DRAFT_ID,
       USER_A,
       JSON.stringify({ draft: 'a-original', n: 1 }),
+      caseDraft,
     ])
   })
 
@@ -696,9 +712,18 @@ describe('tenancy', () => {
   // 7. Cross-user INSERT.
   // -------------------------------------------------------------------------
   it('[FR-19] B inserting a decision under A\'s user_id is rejected with 42501 by the WITH CHECK, not silently accepted', async () => {
+    // Allocated outside the transaction: see the note in beforeAll. A valid case is
+    // supplied deliberately, so that the FK and the NOT NULL are both satisfied and the
+    // WITH CHECK is demonstrably the only thing left to reject the row.
+    const forgedCase = await freshScenarioVersion('tenancy-forged')
     const error = await rejectionOf(() =>
       runAsUser(USER_B, (db) =>
-        db.query(INSERT_DECISION, [FORGED_ID, USER_A, JSON.stringify({ forged: true })]),
+        db.query(INSERT_DECISION, [
+          FORGED_ID,
+          USER_A,
+          JSON.stringify({ forged: true }),
+          forgedCase,
+        ]),
       ),
     )
     // 42501 and not "0 rows": an INSERT cannot be silently filtered, so WITH
@@ -720,11 +745,13 @@ describe('tenancy', () => {
     // under B's OWN id succeeds and affects exactly 1 row. So the 42501 above is
     // the WITH CHECK predicate, and not a missing INSERT grant, a foreign-key
     // failure or a malformed statement.
+    const ownCase = await freshScenarioVersion('tenancy-b-own')
     await runAsUser(USER_B, (db) =>
       db.queryAffectingOne(INSERT_DECISION, [
         B_DECISION_ID,
         USER_B,
         JSON.stringify({ draft: 'b-own' }),
+        ownCase,
       ]),
     )
     expect(await countAs(USER_B, COUNT_DECISIONS_OWNED_BY, USER_B)).toBe(1)

@@ -150,17 +150,37 @@ describe('[INV-03] state is derived by one function used twice (canon 4.4, V29)'
        -- REAL foreign key to auth.users(id), so the auth row goes in first. :'hash' is
        -- still passed by the call site and is deliberately unused — there is no
        -- credential column here to write it to.
+       -- ONE OWNER PER COMBINATION, and that is forced by the schema rather than chosen.
+       -- 20261022170000 added
+       --   create unique index decision_one_open_draft_per_scenario
+       --     on public.decision (user_id, scenario_version_id) where submitted_at is null
+       -- which is the product rule "one open draft per user per case" (plan task 3.1). Half
+       -- of these 32 combinations have submitted_at NULL, so a single owner could legally
+       -- hold exactly ONE of them and the other fifteen would be rejected with 23505.
+       --
+       -- The alternatives were worse. Thirty-two scenario versions would mean bracketing a
+       -- second table out of FORCE RLS to insert them. Dropping the index inside the
+       -- transaction would mean this test no longer runs against the real schema. Neither
+       -- buys anything: app.derive_decision_state() takes five timestamps and never reads
+       -- user_id, so the owner is irrelevant to what is being asserted here.
        insert into auth.users (id, email, created_at, updated_at)
-       values (:'uid', :'email', now(), now()) on conflict (id) do nothing;
+       select ('00000000-0000-0000-0000-00000000c8' || lpad(to_hex(i), 2, '0'))::uuid,
+              'combo' || i || '@example.invalid', now(), now()
+         from generate_series(0, 31) as g(i)
+       on conflict (id) do nothing;
        insert into public.profile (user_id, display_name)
-       values (:'uid', :'email') on conflict (user_id) do nothing;
+       select ('00000000-0000-0000-0000-00000000c8' || lpad(to_hex(i), 2, '0'))::uuid,
+              'combo' || i
+         from generate_series(0, 31) as g(i)
+       on conflict (user_id) do nothing;
 
        -- One row per combination. The timestamps are distinct per milestone so a row
        -- that came back with the wrong columns populated is visible, not merely "set".
        insert into public.decision
-         (user_id, draft_payload, submitted_at, challenged_at, reflected_at,
-          action_recorded_at, closed_at)
-       select :'uid'::uuid,
+         (user_id, scenario_version_id, draft_payload, submitted_at, challenged_at,
+          reflected_at, action_recorded_at, closed_at)
+       select ('00000000-0000-0000-0000-00000000c8' || lpad(to_hex(i), 2, '0'))::uuid,
+              '00000000-0000-0000-0000-000000090003'::uuid,
               jsonb_build_object('combo', i),
               case when (i &  1) <> 0 then '2026-01-02T00:00:00Z'::timestamptz end,
               case when (i &  2) <> 0 then '2026-01-03T00:00:00Z'::timestamptz end,
@@ -184,7 +204,10 @@ describe('[INV-03] state is derived by one function used twice (canon 4.4, V29)'
               (action_recorded_at is not null)::text,
               (closed_at          is not null)::text
          from public.decision
-        where user_id = :'uid'::uuid
+        -- Selected by the key the insert above stamped, not by owner: there are now
+        -- thirty-two owners. The sentinel decision carries draft_payload '{}' and so is
+        -- excluded, and the transaction is rolled back, so this cannot match anything else.
+        where draft_payload ? 'combo'
         order by (draft_payload->>'combo')::integer;
 
        alter table public.decision force row level security;      -- V8 bracket CLOSED
@@ -373,7 +396,8 @@ describe('[INV-03] NEW.state is NULL in BEFORE UPDATE on a generated column (V28
        values (:'uid', :'email', now(), now()) on conflict (id) do nothing;
        insert into public.profile (user_id, display_name)
        values (:'uid', :'email') on conflict (user_id) do nothing;
-       insert into public.decision (id, user_id) values (:'did', :'uid');
+       insert into public.decision (id, user_id, scenario_version_id)
+         values (:'did', :'uid', '00000000-0000-0000-0000-000000090003'::uuid);
 
        create function app.probe_generated_state() returns trigger
          language plpgsql set search_path = pg_catalog as $probe$

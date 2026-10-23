@@ -134,6 +134,7 @@ import {
 } from '../support/scoped-pg'
 import type { UserScopedClient } from '../support/scoped-pg'
 import { backendPid, seedUser } from './support/race'
+import { freshScenarioVersion } from './support/scenario-fixtures'
 
 // ---------------------------------------------------------------------------
 // Identities and fixed ids
@@ -185,8 +186,12 @@ const SHADOWED_NAME = 'uid_shadowed'
 // from a row, an argument or the environment.
 // ---------------------------------------------------------------------------
 
+// $4 is the scenario version. `decision_one_open_draft_per_scenario` permits ONE open
+// draft per user per case (20261022170000), and this file seeds more than one draft for
+// the same user, so each needs its own case. The product rule, not a workaround.
 const INSERT_DECISION =
-  'insert into public.decision (id, user_id, draft_payload) values ($1::uuid, $2::uuid, $3::jsonb)'
+  'insert into public.decision (id, user_id, draft_payload, scenario_version_id) ' +
+  'values ($1::uuid, $2::uuid, $3::jsonb, $4::uuid)'
 const UPDATE_ONE_DRAFT = 'update public.decision set draft_payload = $1::jsonb where id = $2::uuid'
 /**
  * `app.require_user_id()` and not `auth.uid()`, deliberately.
@@ -527,12 +532,22 @@ beforeAll(async () => {
   // turns a WITH CHECK failure's silent zero-row outcome into an error (V7) —
   // and is itself one of the guards under test, which is why the row counts it
   // claims are re-measured below.
+  // Allocated BEFORE the user transaction opens, and that ordering is load-bearing.
+  // freshScenarioVersion() runs ALTER TABLE on public.scenario_version on its own
+  // connection, which needs ACCESS EXCLUSIVE. An insert into public.decision takes a
+  // ROW SHARE lock on scenario_version through the FK, so calling it from inside an open
+  // runAsUser transaction that has already inserted deadlocks: the ALTER waits for the
+  // transaction and the transaction waits for the ALTER. MEASURED as a 120s hook timeout.
+  const caseA1 = await freshScenarioVersion('bg-a1')
+  const caseA2 = await freshScenarioVersion('bg-a2')
+  const caseB1 = await freshScenarioVersion('bg-b1')
+
   await runAsUser(USER_A, async (db) => {
-    await db.queryAffectingOne(INSERT_DECISION, [A_DRAFT_1, db.userId, JSON.stringify({ n: 1 })])
-    await db.queryAffectingOne(INSERT_DECISION, [A_DRAFT_2, db.userId, JSON.stringify({ n: 2 })])
+    await db.queryAffectingOne(INSERT_DECISION, [A_DRAFT_1, db.userId, JSON.stringify({ n: 1 }), caseA1])
+    await db.queryAffectingOne(INSERT_DECISION, [A_DRAFT_2, db.userId, JSON.stringify({ n: 2 }), caseA2])
   })
   await runAsUser(USER_B, async (db) => {
-    await db.queryAffectingOne(INSERT_DECISION, [B_DRAFT_1, db.userId, JSON.stringify({ n: 'b' })])
+    await db.queryAffectingOne(INSERT_DECISION, [B_DRAFT_1, db.userId, JSON.stringify({ n: 'b' }), caseB1])
   })
 }, 120_000)
 

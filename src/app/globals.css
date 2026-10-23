@@ -336,3 +336,429 @@ footer {
   color: var(--fg-muted);
   font-size: 14px; /* sm */
 }
+
+/* ==================================================================== *
+ * Slice 3 — Today and the Decision Desk
+ *
+ * Everything below follows DESIGN.md: 4px space scale, radius 4 for inputs,
+ * buttons and cards and 2px for chips, two elevation levels only, shadows on
+ * genuinely floating layers alone, 44px minimum targets, tabular figures for
+ * every number. No new colour tokens: the palette in §2 is the palette.
+ *
+ * There is no `.score`, no progress bar, no completion ring and no colour
+ * scale behind a number anywhere in this sheet. That is not an omission
+ * (CLAUDE.md §2, docs/decisions.md D14).
+ * ==================================================================== */
+
+/* ------------------------------------------------------------------ *
+ * Site chrome
+ * ------------------------------------------------------------------ */
+
+.site-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-block-end: 12px;
+  border-block-end: 1px solid var(--divider);
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: center;
+}
+
+/* ------------------------------------------------------------------ *
+ * Buttons
+ *
+ * One primary per screen (DESIGN.md §9). `:active` gets a 1px nudge rather
+ * than a scale: §6 forbids transforms under reduced motion, and translate is
+ * cheaper to reason about than a scale that also scales the label.
+ * ------------------------------------------------------------------ */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent-ink);
+  /* --accent-fg is the token computed to clear 4.5:1 against --accent. */
+  color: var(--accent-fg);
+}
+
+.button--quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent-ink);
+  padding: 0 8px;
+}
+
+.button:disabled {
+  /* DESIGN.md: a disabled control is dimmed AND loses the pointer, never
+     dimmed alone. `aria-disabled` is not used in place of `disabled` here
+     because these buttons genuinely must not be activatable. */
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .button {
+    transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+  }
+  .button:hover:not(:disabled) {
+    background: var(--subtle);
+  }
+  .button--primary:hover:not(:disabled) {
+    background: var(--accent-ink);
+    color: var(--surface);
+  }
+}
+
+.button:active:not(:disabled) {
+  translate: 0 1px;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+/* ------------------------------------------------------------------ *
+ * Metadata, chips and the fiction marker
+ * ------------------------------------------------------------------ */
+
+.meta-line {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+/* FR-02 and `docs/ui-ux-design.md` §5: always visible, never behind a
+   disclosure. A bordered mono chip, not a coloured badge — DESIGN.md §1
+   forbids colour carrying evaluative meaning, and "fictional" is a fact
+   about the content rather than a warning about it. */
+.fiction-marker {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg);
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  padding: 4px 8px;
+}
+
+.facts {
+  display: grid;
+  gap: 8px 16px;
+  margin-block-start: 16px;
+}
+
+.facts dt {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+@media (min-width: 40rem) {
+  .facts {
+    grid-template-columns: 18ch minmax(0, 1fr);
+    align-items: baseline;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Disclosures — the source and claim registers
+ * ------------------------------------------------------------------ */
+
+details {
+  border-block-start: 1px solid var(--divider);
+  padding-block: 12px;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 500;
+  /* The target must reach 44px even though a summary is a single line. */
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.register {
+  list-style: none;
+  padding: 0;
+  margin-block-start: 8px;
+}
+
+.register > li {
+  padding-block: 12px;
+  max-width: 70ch;
+}
+
+.register > li + li {
+  border-block-start: 1px solid var(--divider);
+  margin-block-start: 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * The form
+ * ------------------------------------------------------------------ */
+
+.group {
+  margin-block-start: 32px;
+  padding-block-start: 16px;
+  border-block-start: 1px solid var(--divider);
+}
+
+.group > h2 {
+  margin-block-end: 4px;
+}
+
+.field {
+  margin-block-start: 24px;
+  max-width: 70ch;
+}
+
+.field > label {
+  display: block;
+  font-weight: 500;
+  font-size: 14px;
+  margin-block-end: 4px;
+}
+
+/* Persists in the markup rather than appearing on error (DESIGN.md §9). */
+.field-help {
+  color: var(--fg-muted);
+  font-size: 14px;
+  margin-block-end: 8px;
+  max-width: 70ch;
+}
+
+.field textarea,
+.field input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 18px; /* lg: long prose fields */
+  line-height: 1.5;
+}
+
+.field textarea {
+  /* `field-sizing: content` grows the box with the content. It also SHRINKS it,
+     which is the part that bites: MEASURED at 320px, an empty textarea with
+     rows="3" rendered 288x49 — exactly one line, because content sizing wins
+     over the `rows` attribute. `docs/ui-ux-design.md` §6.4 asks for a minimum
+     of four lines for rationale and two elsewhere, so the floor has to be
+     expressed as a height the shrink cannot cross.
+
+     `--rows` is set per field from the same number the component passes to the
+     `rows` attribute, so the floor and the fallback cannot disagree. The 24px
+     covers the 10px padding each side plus the 1px borders. */
+  field-sizing: content;
+  min-height: calc(var(--rows, 2) * 1.5em + 24px);
+  resize: vertical;
+}
+
+.field input[type='number'] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  max-width: 10ch;
+}
+
+/* Read-only is visually AND semantically distinct from disabled
+   (`docs/ui-ux-design.md` §6.6). A subtle fill with a full border, not a
+   dimmed input: dimming would say "temporarily unavailable" about a value
+   that is permanent. */
+.field-frozen {
+  background: var(--subtle);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-size: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-width: 70ch;
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: 14px;
+  margin-block-start: 8px;
+  /* The word matters, not the colour (DESIGN.md §1): every message rendered
+     here begins with a plain statement of what is wrong. */
+}
+
+.confidence-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+/* A word beside the number, so the value is not carried by the digits alone.
+   No track, no fill, no gradient: `docs/ui-ux-design.md` §6.3 rules out an
+   evaluative scale behind confidence. */
+.confidence-band {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* ------------------------------------------------------------------ *
+ * The completeness summary
+ *
+ * A POSITION INDICATOR, not a progress bar (`docs/ui-ux-design.md` §6.1).
+ * Counts in mono, no bar, no percentage, no colour change as it fills.
+ * ------------------------------------------------------------------ */
+
+.summary-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  border-block-end: 1px solid var(--divider);
+  padding-block: 8px;
+  margin-block-start: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.summary-bar a {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.summary-bar a:hover {
+  color: var(--fg);
+}
+
+.autosave {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  /* It appears constantly, so it does not animate (ui-ux §6.5). */
+  min-height: 1.4em;
+}
+
+.autosave--failed {
+  color: var(--danger);
+}
+
+/* ------------------------------------------------------------------ *
+ * The one dialog
+ *
+ * The only genuinely floating layer in P0, so the only place DESIGN.md §5
+ * permits a shadow, tinted toward hue 75.
+ * ------------------------------------------------------------------ */
+
+dialog.confirm {
+  max-width: 60ch;
+  width: calc(100% - 32px);
+  padding: 24px;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px oklch(0.2 0.02 75 / 0.28);
+}
+
+dialog.confirm::backdrop {
+  background: oklch(0.2 0.02 75 / 0.45);
+}
+
+dialog.confirm > * + * {
+  margin-block-start: 16px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  dialog.confirm[open] {
+    /* 240ms, centred origin: a modal is not anchored to a trigger, so it does
+       not scale from one (ui-ux §6.5). */
+    animation: confirm-in 240ms var(--ease-out);
+  }
+}
+
+@keyframes confirm-in {
+  from {
+    opacity: 0;
+    /* Never from scale(0): nothing in the world appears from nothing. */
+    scale: 0.96;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Sign in
+ * ------------------------------------------------------------------ */
+
+.auth-card {
+  max-width: 44ch;
+  margin-block-start: 24px;
+}
+
+.auth-card .field {
+  margin-block-start: 16px;
+}
+
+.auth-card .field input {
+  font-size: 16px;
+}
+
+.notice {
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  background: var(--subtle);
+  padding: 12px 16px;
+  max-width: 70ch;
+}

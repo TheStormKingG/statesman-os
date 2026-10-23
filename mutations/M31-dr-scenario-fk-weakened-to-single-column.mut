@@ -1,0 +1,35 @@
+# M31 — dr_scenario_fk weakened from the composite grounding key to a plain single-column
+# reference.
+#
+# THIS IS THE MUTATION THAT LOOKS LIKE A SIMPLIFICATION. "A revision references a scenario
+# version" is a true sentence and the replacement below says exactly that, with a shorter
+# constraint and a conventional shape. It is also the whole defect: the composite key pins
+# a revision to the case ITS PARENT answers, and a single-column FK pins it to any case
+# that exists. Under the mutation a revision can be grounded in a DIFFERENT version of the
+# case than the decision it belongs to, which is the cross-grounding ADR-0008 exists to
+# make structurally impossible.
+#
+# WHY IT MATTERS BEYOND TIDINESS. The citation whitelist is enforced BY THE KEY: a claim is
+# citable because the claim and the thing citing it resolve to one `scenario_version_id`,
+# not because a check ran. M16 proves that hole is closed for `scenario_claim`. Leaving it
+# open on `decision_revision` would make M16 a demonstration about nothing, because a
+# challenge could cite a claim from a version the decision never saw.
+#
+# `on delete restrict` rather than cascade in the replacement, so the mutation does not
+# ALSO change deletion behaviour — a mutation that alters two properties cannot attribute
+# its own catch to either.
+id: M31
+title: dr_scenario_fk weakened from (decision_id, scenario_version_id) to a single-column reference, so a revision can be grounded in another case
+expect: caught
+proves: a revision is pinned to the scenario version its PARENT answers by the composite key itself, not by any write-time check (ADR-0008)
+expect-test: [FR-04] dr_scenario_fk refuses a revision grounded in a different case, and accepts the matching one
+
+file: supabase/migrations/20261022170000_decision_scenario_linkage.sql
+count: 1
+@@FIND
+  add constraint dr_scenario_fk foreign key (decision_id, scenario_version_id)
+    references public.decision (id, scenario_version_id) on delete cascade;
+@@REPLACE
+  add constraint dr_scenario_fk foreign key (scenario_version_id)
+    references public.scenario_version (id) on delete restrict;
+@@END

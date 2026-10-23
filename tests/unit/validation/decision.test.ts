@@ -21,6 +21,7 @@
  * passes under every mutation.
  */
 import { describe, expect, it } from 'vitest'
+import { FIELD_COPY } from '../../../src/app/desk/field-copy'
 import {
   DECISION_FIELD_ORDER,
   DECISION_GROUPS,
@@ -243,5 +244,113 @@ describe('toRevisionPayload — the split onto the RPC', () => {
     if (!result.ok) throw new Error('fixture must be valid')
     const payload = toRevisionPayload(result.value)
     expect(payload.p_content['objective']).toBe('stated plainly')
+  })
+})
+
+describe('the Desk copy covers the field set', () => {
+  /**
+   * DESIGN.md §9 requires a label above every input and helper text that PERSISTS
+   * in the markup. Deep equality on the key sets, so a field added to the schema
+   * without copy — which would render as a nameless box with no guidance — is a
+   * test failure, and a leftover entry is copy for a field that no longer exists.
+   */
+  it('[FR-03] every field has a label, helper text and a row count, and nothing extra', () => {
+    expect(Object.keys(FIELD_COPY).sort()).toEqual([...EXPECTED_ORDER].sort())
+    for (const field of EXPECTED_ORDER) {
+      const copy = FIELD_COPY[field]
+      expect(copy.label.trim().length, `${field} label`).toBeGreaterThan(0)
+      expect(copy.help.trim().length, `${field} help`).toBeGreaterThan(0)
+      expect(copy.rows, `${field} rows`).toBeGreaterThan(0)
+      // The label is never the placeholder and never the field name.
+      expect(copy.label, `${field} label must not be the key`).not.toBe(field)
+    }
+  })
+
+  /**
+   * `docs/ui-ux-design.md` §11 lists the phrases the interface never uses: `Great work`,
+   * `You are on track`, `Streak`, `Score`, `Level up`, `Almost there`, `Don't miss`,
+   * `Only N left`. They are banned because they grade or hurry the user, and the Desk is
+   * the one screen where that would most distort what gets written.
+   *
+   * ── WHY THESE ARE WORD-BOUNDARY PATTERNS AND NOT SUBSTRINGS ────────────────
+   *
+   * The first version used bare substrings and failed on the confidence helper text,
+   * which ends "and it is never scored". That sentence is the DENIAL of the thing §11
+   * bans, and flagging it is the same defect `no-unscoped-counts.test.ts` recorded:
+   * a detector that flags its own documentation trains people to silence it.
+   *
+   * Loosening a gate to make it pass is only legitimate if the gate still fires on what
+   * it was built for, so the control below asserts exactly that. Without it this edit
+   * would be indistinguishable from deleting the test.
+   */
+  const BANNED_PATTERNS: readonly RegExp[] = [
+    /\bgreat work\b/i,
+    /\byou are on track\b/i,
+    /\bstreak\b/i,
+    /\bscore\b/i,
+    /\bscores\b/i,
+    /\blevel up\b/i,
+    /\balmost there\b/i,
+    /\bdon'?t miss\b/i,
+    /\bonly \S+ left\b/i,
+    /\bexcellent\b/i,
+    /\bwell done\b/i,
+  ]
+
+  it('[FR-03] no field copy congratulates, hurries or grades', () => {
+    for (const field of EXPECTED_ORDER) {
+      const text = `${FIELD_COPY[field].label} ${FIELD_COPY[field].help}`
+      for (const pattern of BANNED_PATTERNS) {
+        expect(
+          pattern.test(text),
+          `${field} copy matches the banned pattern ${String(pattern)}: ${text}`,
+        ).toBe(false)
+      }
+    }
+  })
+
+  it('[FR-03] CONTROL: the patterns still fire on the phrases §11 actually bans', () => {
+    const mustBeCaught = [
+      'Great work on that one',
+      'You are on track for the week',
+      'Your streak is 4 days',
+      'Your score is 72',
+      'Level up to stage 3',
+      'Almost there, two fields left',
+      "Don't miss today's case",
+      'Only 2 left to finish',
+    ]
+    for (const phrase of mustBeCaught) {
+      expect(
+        BANNED_PATTERNS.some((p) => p.test(phrase)),
+        `"${phrase}" is one of the phrases §11 bans and no pattern caught it, so this ` +
+          'gate has been loosened into something that cannot fail',
+      ).toBe(true)
+    }
+    // And the denial that broke the first version must NOT be caught, so the fix is
+    // asserted in both directions rather than assumed.
+    const denial = 'it is recorded for calibration against what happens, and it is never scored'
+    expect(
+      BANNED_PATTERNS.some((p) => p.test(denial)),
+      'the patterns flagged a sentence that DENIES grading, which is the false positive ' +
+        'this control exists to pin down',
+    ).toBe(false)
+  })
+
+  /** DESIGN.md §9: no em dash in any interface string. */
+  it('[FR-03] no field copy contains an em dash', () => {
+    for (const field of EXPECTED_ORDER) {
+      const text = `${FIELD_COPY[field].label} ${FIELD_COPY[field].help}`
+      expect(text, `${field} copy contains an em dash`).not.toContain('\u2014')
+    }
+  })
+
+  /** ui-ux §6.4: four lines minimum for rationale, two elsewhere. */
+  it('[FR-03] rationale has the deepest box, and nothing is below the two-line floor', () => {
+    expect(FIELD_COPY.rationale.rows).toBeGreaterThanOrEqual(4)
+    for (const field of EXPECTED_ORDER) {
+      if (field === 'confidence') continue // a number input, one line by design
+      expect(FIELD_COPY[field].rows, `${field} rows`).toBeGreaterThanOrEqual(2)
+    }
   })
 })

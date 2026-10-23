@@ -1,0 +1,29 @@
+# M32 — the one-open-draft index loses its UNIQUE.
+#
+# A one-word edit, and the sort a reviewer makes while "adding an index for the Desk's
+# lookup": the index still exists, still covers the same columns, still carries the same
+# partial predicate, and still speeds up exactly the query it was added for. It simply
+# stops being a constraint.
+#
+# WHAT IT COSTS. `decision_one_open_draft_per_scenario` is plan task 3.1's product rule:
+# one open draft per user per case. FR-03 requires an incomplete draft to be reopenable
+# WITHOUT LOSS, and that presumes there is ONE draft to reopen. With two, "the draft" is
+# undefined, `findLatestDecisionForScenario` returns whichever was created last, and the
+# other one becomes unreachable text the user wrote and cannot get back. Nothing would
+# raise; the data would just be stranded.
+#
+# The index is deliberately left in place by the mutation rather than deleted, so that the
+# catch cannot be attributed to a missing index or a slower plan.
+id: M32
+title: decision_one_open_draft_per_scenario created as a plain index instead of a unique one
+expect: caught
+proves: one open draft per user per case is ENFORCED, not merely indexed, so FR-03's reopen-without-loss has exactly one draft to reopen
+expect-test: [FR-03] one open draft per user per case: a second is refused, another case is allowed
+
+file: supabase/migrations/20261022170000_decision_scenario_linkage.sql
+count: 1
+@@FIND
+create unique index decision_one_open_draft_per_scenario
+@@REPLACE
+create index decision_one_open_draft_per_scenario
+@@END

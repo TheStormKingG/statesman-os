@@ -450,8 +450,11 @@ export default function HomePage() {
             <li>
               <span className="status-label">Usable</span>
               <span>
-                This shell, and nothing else. One page, the chain check above, the design token
-                layer.
+                Sign in and sign up, <a href="./today/">Today</a> and the Decision Desk. Today
+                presents the one published case; the Desk holds the fourteen structured fields,
+                autosaves a draft, and freezes a submission into a revision that cannot be
+                edited. An account has to exist before any of it shows you anything, and
+                creating one needs a confirmation email.
               </span>
             </li>
             <li>
@@ -463,14 +466,7 @@ export default function HomePage() {
                 only part of it this page can show you.
               </span>
             </li>
-            <li>
-              <span className="status-label">No screen</span>
-              <span>
-                Sign in and sign up. No account can be created and no session can be
-                established, which is why no screen that reads your data could work yet even if
-                one existed, and why the check above runs with no identity.
-              </span>
-            </li>
+
             <li>
               <span className="status-label">No screen</span>
               <span>
@@ -481,8 +477,18 @@ export default function HomePage() {
             <li>
               <span className="status-label">No screen</span>
               <span>
-                Slices 3 to 6: Today, the Decision Desk, Challenge Review, Reflection and
-                Development, Review History, the AI challenge system, and the hardening pass.
+                Challenge Review, Reflection and Development, Review History, the AI challenge
+                system and the hardening pass, which are slices 4 to 6. A submitted decision
+                therefore has nothing to open next: there is no challenge system yet, and the
+                Desk says so rather than offering a button that leads nowhere.
+              </span>
+            </li>
+            <li>
+              <span className="status-label">No table</span>
+              <span>
+                Development actions. Today has an open-actions section with no list in it,
+                because the schema has no table to count: that is a part of the product which
+                does not exist rather than an empty one, and it is labelled that way.
               </span>
             </li>
           </ul>

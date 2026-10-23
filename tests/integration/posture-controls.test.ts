@@ -101,6 +101,7 @@ import {
   workerDatabaseName,
 } from './support/db'
 import { SENTINEL_USER_ID } from './support/sentinels'
+import { SEEDED_SCENARIO_VERSION_ID } from './support/scenario-fixtures'
 
 /** What the function did, as data rather than as a thrown error. */
 interface PostureProbe {
@@ -343,9 +344,10 @@ const CONTROLS: readonly Control[] = [
     // assertSentinelIntegrity() asserts `= 1`, and a rule that only checked presence would
     // let the suite's own premise rot.
     setup: `alter table public.decision no force row level security;
-            insert into public.decision (id, user_id, draft_payload, created_at)
+            insert into public.decision (id, user_id, draft_payload, created_at,
+                                        scenario_version_id)
               values ('00000000-0000-0000-0000-00000000de99', '${SENTINEL_USER_ID}',
-                      '{}'::jsonb, now());
+                      '{}'::jsonb, now(), '${SEEDED_SCENARIO_VERSION_ID}'::uuid);
             alter table public.decision force row level security;`,
     probe: probeAsPostgres,
     expect: [`${FRAGMENT.rule9a} decision: 2, expected exactly 1`],

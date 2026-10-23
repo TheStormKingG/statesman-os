@@ -115,6 +115,8 @@ export interface Database {
         Row: {
           id: string
           user_id: string
+          // 20261022170000. The case this decision answers.
+          scenario_version_id: string
           draft_payload: Json
           draft_updated_at: string | null
           submitted_at: string | null
@@ -125,7 +127,12 @@ export interface Database {
           created_at: string
           state: DecisionState
         }
-        Insert: { user_id: string; id?: string; draft_payload?: Json }
+        // `scenario_version_id` is REQUIRED on insert and ABSENT from Update, and the
+        // asymmetry is the grant: `authenticated` holds table-level INSERT but
+        // `update (draft_payload)` only, so the case is chosen when the draft is created
+        // and cannot be changed afterwards even by its owner. Saying so in the type means
+        // a call site that tries gets a compile error rather than a 42501 at runtime.
+        Insert: { user_id: string; scenario_version_id: string; id?: string; draft_payload?: Json }
         Update: { draft_payload?: Json }
         Relationships: NoRelationships
       }
@@ -134,6 +141,10 @@ export interface Database {
           id: string
           decision_id: string
           user_id: string
+          // 20261022170000. Pinned to the parent decision by dr_scenario_fk, so a
+          // revision can never be grounded in a different case than the decision it
+          // answers (ADR-0008).
+          scenario_version_id: string
           revision_no: number
           content: Json
           confidence: number
@@ -150,6 +161,7 @@ export interface Database {
         Insert: {
           decision_id: string
           user_id: string
+          scenario_version_id: string
           revision_no: number
           content: Json
           confidence: number
