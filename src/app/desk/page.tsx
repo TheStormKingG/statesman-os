@@ -166,6 +166,23 @@ function Desk({ data }: { readonly data: Loaded }): React.ReactElement {
     undefined,
   )
 
+  /**
+   * Locked covers the moment BETWEEN a successful submit and a reload.
+   *
+   * `frozen` is derived from the decision as it was LOADED, so it is still false
+   * immediately after a submission and the form stayed editable. MEASURED against the
+   * live site: after submitting, every textarea was still enabled and Save draft was
+   * still offered. Typing into it would then have been autosaved against a frozen
+   * draft, which the database refuses (ST003) — so the user would have kept writing
+   * into a form that reported `Not saved. Your text is still here.` and had nowhere to
+   * put it.
+   *
+   * The fields are not re-fetched: the submitted values are already on screen, and the
+   * read-only panels `frozen` renders need the revisions, which this load does not have.
+   * Disabling is the honest state for the gap, and a reload shows the real record.
+   */
+  const locked = frozen || submitted !== undefined
+
   const dialogRef = useRef<HTMLDialogElement | null>(null)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   /**
@@ -292,6 +309,11 @@ function Desk({ data }: { readonly data: Loaded }): React.ReactElement {
             Challenge review arrives in Slice 4. There is no challenge system yet, so there
             is nothing to open.
           </p>
+          <p>
+            <Link href={{ pathname: '/history/', query: { d: data.decision.id } }}>
+              Open the evidence trail for this record
+            </Link>
+          </p>
         </section>
       ) : null}
 
@@ -332,7 +354,7 @@ function Desk({ data }: { readonly data: Loaded }): React.ReactElement {
                     name={name}
                     value={fields[name] ?? ''}
                     error={errors[name]}
-                    disabled={!data.decision.draftReadable}
+                    disabled={locked || !data.decision.draftReadable}
                     onChange={(value) => setField(name, value)}
                     onBlur={() => {
                       if (save.kind === 'dirty') void persist(latest.current)
@@ -342,24 +364,28 @@ function Desk({ data }: { readonly data: Loaded }): React.ReactElement {
               </fieldset>
             ))}
 
-            <div className="button-row" style={{ marginBlockStart: '32px' }}>
-              <button
-                type="submit"
-                className="button button--primary"
-                disabled={!data.decision.draftReadable}
-              >
-                Submit decision
-              </button>
-              <button
-                type="button"
-                className="button"
-                disabled={!data.decision.draftReadable}
-                onClick={() => void persist(latest.current)}
-              >
-                Save draft
-              </button>
-              <AutosaveLine state={save} />
-            </div>
+            {/* Once submitted, there is nothing left to save and nothing left to
+                submit, so neither control is offered. */}
+            {locked ? null : (
+              <div className="button-row" style={{ marginBlockStart: '32px' }}>
+                <button
+                  type="submit"
+                  className="button button--primary"
+                  disabled={!data.decision.draftReadable}
+                >
+                  Submit decision
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={!data.decision.draftReadable}
+                  onClick={() => void persist(latest.current)}
+                >
+                  Save draft
+                </button>
+                <AutosaveLine state={save} />
+              </div>
+            )}
             {submitError === undefined ? null : (
               <p className="field-error" role="alert">
                 The submission was not recorded. {submitError}
