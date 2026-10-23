@@ -277,6 +277,37 @@ printf '==================================================================\n'
 printf ' %d of %d PASS · %d FAIL · %d NOT RUN · %d skipped\n' \
   "$PASSED" "$TOTAL" "$FAILED" "$NOTRUN" "$SKIPPED"
 
+# ----------------------------------------------- out of band: the live-only checks
+# WHY THIS BLOCK EXISTS. On 2026-10-22 this script reported every gate green while the
+# product's only write path was completely unreachable: schema `app` was not in PostgREST's
+# exposed-schema list, so every call from a browser answered PGRST106. Nothing here could
+# see it, because the integration suite connects to PostgreSQL directly and a direct
+# connection never consults that list. A suite's blind spot is exactly the set of components
+# it does not traverse (docs/transport-blind-spots.md, ADR-0017).
+#
+# These checks need credentials and the network, so they CANNOT be gate steps: this script
+# must keep passing with neither. But an absent check nobody mentions becomes the normal
+# state, so they are printed here, as NOT RUN, on every single run.
+#
+# THIS BLOCK DELIBERATELY DOES NOT TOUCH $PASSED/$FAILED/$NOTRUN/$SKIPPED, $BAD OR THE EXIT
+# STATUS. It is a notice, not a verdict. Making it a verdict would make every offline and
+# credential-less run red, which is what gets a warning deleted rather than fixed.
+printf '==================================================================\n'
+printf ' OUT OF BAND: NOT RUN here, and not counted above\n'
+printf '==================================================================\n'
+printf ' These cross a transport this suite does not traverse. They are\n'
+printf ' offline and credential-less by design, so their absence is NOT a\n'
+printf ' gate failure. It is also NOT evidence that the live path works.\n'
+printf '\n'
+printf ' %-34s %s\n' "CHECK" "COVERS"
+printf ' %-34s %s\n' "----------------------------------" "---------------------------"
+printf ' %-34s %s\n' "scripts/verify-rest-exposure.sh" "TBS-01 TBS-02 TBS-03 TBS-04"
+printf ' %-34s %s\n' "npx supabase db push" "the applied migration set"
+printf '\n'
+printf ' Blind spots with no instrument at all: TBS-06 (the published bundle),\n'
+printf ' TBS-07 (Supabase Auth endpoints), TBS-08 (the browser runtime).\n'
+printf ' docs/transport-blind-spots.md is the owner of that register.\n'
+
 BAD=$((FAILED + NOTRUN + SKIPPED))
 if [ "$BAD" -eq 0 ]; then
   printf ' ALL GATES PASSED\n'
