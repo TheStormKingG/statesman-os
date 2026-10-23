@@ -156,7 +156,16 @@ type SaveState =
   | { readonly kind: 'saved'; readonly at: Date }
   | { readonly kind: 'failed'; readonly retrying: boolean }
 
-function Desk({ data }: { readonly data: Loaded }): React.ReactElement {
+/**
+ * Exported as a TEST SEAM, not as a public component.
+ *
+ * `tests/component/desk-lock.test.tsx` renders this directly with a `Loaded`
+ * fixture. The alternative was to render `DeskPage`, which would mean standing
+ * up `AuthGate`, a session and the three loader calls to assert one state
+ * transition — more mocked surface, and the mocks rather than the screen would
+ * be under test. Nothing else imports it.
+ */
+export function Desk({ data }: { readonly data: Loaded }): React.ReactElement {
   const frozen = data.decision.submittedAt !== null
   const [fields, setFields] = useState<DraftFields>(data.decision.fields)
   const [errors, setErrors] = useState<FieldErrors>({})

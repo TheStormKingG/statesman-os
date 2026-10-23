@@ -162,20 +162,28 @@ jobs:
       # Each gate is its own step so the log says which one failed. A failing
       # step fails the job, and `deploy` needs this job, so a red gate cannot
       # publish. `continue-on-error` is deliberately absent everywhere.
-      - name: Gate 1/5 — typecheck
+      - name: Gate 1/6 — typecheck
         run: npx tsc --noEmit
 
-      - name: Gate 2/5 — lint
+      - name: Gate 2/6 — lint
         run: npx eslint .
 
-      - name: Gate 3/5 — import boundaries
+      - name: Gate 3/6 — import boundaries
         run: npx tsx scripts/check-import-boundaries.ts
 
-      - name: Gate 4/5 — import boundaries, positive control
+      - name: Gate 4/6 — import boundaries, positive control
         run: npx tsx scripts/check-import-boundaries.ts --selftest
 
-      - name: Gate 5/5 — unit suite
+      - name: Gate 5/6 — unit suite
         run: npx vitest run --config vitest.unit.config.ts
+
+      # ADR-0018. jsdom only: no database, no credentials, no network, so unlike
+      # test:integration and mutation this one CAN run on a bare runner — and it
+      # guards the path the defect it exists for actually took. The Desk shipped
+      # staying editable after a successful submit, and every gate above was
+      # green over that state because none of them renders a screen.
+      - name: Gate 6/6 — component suite
+        run: npx vitest run --config vitest.component.config.ts
 
       - name: Build the static export
         run: npx next build
@@ -275,12 +283,13 @@ jobs:
             echo "| boundaries | ran here |"
             echo "| boundaries:selftest | ran here |"
             echo "| test:unit | ran here |"
+            echo "| test:component | ran here |"
             echo "| build + export audit | ran here |"
             echo "| **test:integration** | **NOT RUN** — needs PostgreSQL 17 with the \`auth.uid()\` emulation, the \`anon\`/\`authenticated\` roles, a cloned template database and \`psql\`. |"
             echo "| **mutation** | **NOT RUN** — same database dependency; it is the gate that proves the others can fail. |"
             echo
             echo "A green run here means the code compiles, lints, respects its import"
-            echo "boundaries and passes the unit suite. **It does not mean the row level"
+            echo "boundaries and passes the unit and component suites. **It does not mean the row level"
             echo "security policies are correct**, and under ADR-0015 those policies are the"
             echo "only thing protecting the journal. Run \`bash scripts/gates.sh\` locally"
             echo "before pushing."

@@ -73,7 +73,7 @@ cd "$ROOT" || exit 2
 export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
 
-STEPS="typecheck lint boundaries boundaries:selftest test:unit test:integration mutation"
+STEPS="typecheck lint boundaries boundaries:selftest test:unit test:component test:integration mutation"
 
 BOUNDARY_SCRIPT="scripts/check-import-boundaries.ts"
 
@@ -86,6 +86,7 @@ step_display() {
     boundaries)           echo "npm run boundaries" ;;
     boundaries:selftest)  echo "node_modules/.bin/tsx $BOUNDARY_SCRIPT --selftest" ;;
     test:unit)            echo "npm run test:unit" ;;
+    test:component)      echo "npm run test:component" ;;
     test:integration)     echo "npm run test:integration" ;;
     mutation)             echo "bash scripts/mutation-check.sh" ;;
     *)                    echo "<unknown step: $1>" ;;
@@ -115,6 +116,15 @@ step_missing() {
       [ -x "node_modules/.bin/vitest" ]   || missing="$missing vitest"
       [ -f "vitest.unit.config.ts" ]      || missing="$missing vitest.unit.config.ts"
       ;;
+    test:component)
+      # jsdom is a devDependency and the suite is the only instrument that
+      # renders a screen. Absent, this reports NOT RUN rather than PASS: canon
+      # §8.6, an unexecuted check is never a pass.
+      [ -x "node_modules/.bin/vitest" ]        || missing="$missing vitest"
+      [ -f "vitest.component.config.ts" ]      || missing="$missing vitest.component.config.ts"
+      [ -d "node_modules/jsdom" ]              || missing="$missing jsdom"
+      [ -d "node_modules/@testing-library/react" ] || missing="$missing @testing-library/react"
+      ;;
     test:integration)
       [ -x "node_modules/.bin/vitest" ]        || missing="$missing vitest"
       [ -f "vitest.integration.config.ts" ]    || missing="$missing vitest.integration.config.ts"
@@ -139,6 +149,7 @@ step_body() {
     boundaries)           npm run boundaries ;;
     boundaries:selftest)  node_modules/.bin/tsx "$BOUNDARY_SCRIPT" --selftest ;;
     test:unit)            npm run test:unit ;;
+    test:component)      npm run test:component ;;
     test:integration)     npm run test:integration ;;
     mutation)             bash scripts/mutation-check.sh ;;
     *)                    echo "gates.sh: unknown step '$1'" >&2; return 2 ;;

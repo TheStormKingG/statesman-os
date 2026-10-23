@@ -205,8 +205,12 @@ to have been the anon key at all, or the project's JWT secret was exposed.
 
 ## 7. What a green deployment does and does not certify
 
-`pages.yml` runs **five** of the seven gates in `scripts/gates.sh`: `typecheck`, `lint`,
-`boundaries`, `boundaries:selftest`, `test:unit`, plus the build and the export audit.
+`pages.yml` runs **six** of the eight gates in `scripts/gates.sh`: `typecheck`, `lint`,
+`boundaries`, `boundaries:selftest`, `test:unit`, `test:component`, plus the build and the
+export audit. `test:component` (ADR-0018) is jsdom only — no database, no credentials and no
+network — so it runs on a bare runner, and it guards the path the defect it exists for
+actually took: the Desk shipped staying editable after a successful submit while every other
+CI gate was green over that state, because none of them renders a screen.
 
 It does **not** run `test:integration` or `mutation`. Both need a PostgreSQL 17 cluster
 with the local emulation of `auth.uid()`, the `anon` and `authenticated` roles, a template
