@@ -231,7 +231,7 @@ Closing this gap means adding a Postgres service container plus the emulation to
 `pages.yml`. Until then, **do not enter real decisions into the deployed site.** ADR-0015
 states this as a release gate, not a quality measure.
 
-### And one thing no local gate can certify: that the REST surface is actually served
+### And what no local gate can certify: that the REST surface is actually served
 
 `scripts/gates.sh` passes with no credentials and no network, which is what makes it
 runnable. The cost is that it cannot see the live project at all, and one property that
@@ -254,29 +254,83 @@ It reads `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from the
 or from the gitignored `.env.supabase.local`. Both are publishable. It never reads the
 service role key.
 
+It probes **all three** lifecycle entry points — `app.submit_decision`,
+`app.append_revision`, `app.stamp_milestone` — not one. PostgREST resolves an RPC by schema,
+then by name, then by matching the posted JSON keys against its own cache, and the `EXECUTE`
+grant is three separate `GRANT` lines that every migration's
+`revoke execute on all functions in schema app` strips. All of that is per function. Measured:
+with one argument key renamed, two functions reported healthy and the third returned
+`PGRST202` **in the same run**. One green function is not evidence about its siblings.
+
+For each of the three, leg 1 prints:
+
 | It prints | Meaning |
 |---|---|
-| `42501` | **healthy.** Schema `app` is served and an anonymous caller is refused at the schema boundary, before any policy or function body |
-| `PGRST106` | the exposure is **missing** — the write path is dead |
-| `PGRST202` | the schema is admitted but its contents are not cached (`notify pgrst, 'reload schema'`) |
+| `42501` | **healthy.** The schema is served, this function's cached signature matches the keys the client sends, and an anonymous caller is refused at the schema boundary, before any policy or function body |
+| `PGRST106` | the exposure is **missing** — the whole write path is dead |
+| `PGRST202` | the schema is admitted but **this function** is not resolved: a stale cache (`notify pgrst, 'reload schema'`), or a signature that no longer matches the client's keys |
+| anything else | reported as a **failure**. An answer the script does not recognise is not evidence of health — grading on "not the error I was looking for" is the original defect restated |
 
-Before grading any of that it asks PostgREST for a schema that does not exist, which **must**
-come back `PGRST106`. If it does not, the probe can no longer tell a missing exposure from a
-present one, so it exits non-zero saying so rather than reporting on the real request.
+Before grading each function it asks PostgREST for a schema that does not exist, with that
+function's own argument keys, which **must** come back `PGRST106`. If it does not, the probe
+can no longer tell a missing exposure from a present one, and it **refuses to grade the real
+request at all** rather than falling back to reporting on a probe it has just shown it cannot
+trust.
+
+The controls have been observed failing, which is the only thing that shows they work. Five
+runs on 2026-10-23, recorded in the script's own header:
+
+| run | changed | result | exit |
+|---|---|---|---|
+| 0 | nothing | control `PGRST106` ×3, then `42501` ×3 | **0** |
+| A | probe pointed at `auth` — a schema that exists but is not exposed | "THE EXPOSURE IS MISSING" | **1** |
+| B | control pointed at `app`, which **is** exposed | "CONTROL FAILED", nothing graded | **1** |
+| C | one argument key renamed | two healthy, one "NOT RESOLVED" | **1** |
+| D | leg 2's grading-table control, extracted and run against a sound and a broken table | three distinct codes OK; two sharing one code → "CONTROL 2 FAILED" | **0** / **1** |
 
 **What it does not yet certify.** `42501` proves anonymous callers are refused. It does not
 prove a *signed-in* user can execute the lifecycle RPCs — a different claim, and unprovable
 until an account exists on the project. The catalogue says the chain is intact
 (`authenticated` holds `USAGE` on `app` and `EXECUTE` on the three entry points), but a
 privilege reading is not a round trip. Supply credentials and the script runs the second leg,
-which must come back `ST005` from inside the function body:
+in which each entry point must answer its own SQLSTATE from inside its own function body:
 
 ```
 STATESMAN_PROBE_EMAIL=... STATESMAN_PROBE_PASSWORD=... bash scripts/verify-rest-exposure.sh
 ```
 
-It calls `app.stamp_milestone` on an all-zeros decision id, which matches no row and writes
-nothing. Without credentials that leg prints **NOT RUN** and is never counted as a pass.
+Each function answers a **different** in-body SQLSTATE, and that is the point:
+`submit_decision` must return `ST010`, `append_revision` `ST011`, `stamp_milestone` `ST005`.
+The first two take identical argument keys and differ only in the body they run, so a proxy, a
+cache collision or a misdirected route would make their answers match — and matching means at
+least one answer is not that function's own code, which the per-function grade rejects. An
+answer that is another entry point's SQLSTATE is reported as a routing fault, not graded.
+
+What the per-function grade *cannot* see is the expectations table itself, so a separate control
+runs before any request and asserts the three expected codes are still pairwise distinct. An
+earlier version of this control compared the two answers *after* grading them and could never
+fail; ADR-0017 records why, and run D shows the replacement failing.
+
+Every call uses an all-zeros decision id and a random per-run idempotency token, so each
+function raises before its `INSERT` (or updates zero rows and rolls back). Nothing is written.
+
+**Leg 2 has never been executed**, because no probe credential exists on this machine. Its
+expected codes are read from the function bodies, and a reading is not a round trip. Without
+credentials the leg prints **NOT RUN** and is never counted as a pass.
+
+### The register is the durable artefact, not this probe
+
+`docs/transport-blind-spots.md` lists every component on the production path that
+`scripts/gates.sh` does not traverse, with a `TBS-nn` id each — the exposed-schema list, the
+per-function schema cache, the `EXECUTE` grant as the gateway exercises it, the JWT-to-role
+mapping, TLS, the published bundle, the Auth endpoints and the browser runtime. The probe
+above closes four of those rows; **three have no instrument at all** and are recorded as open.
+
+ADR-0017 records why the register exists rather than just one more test: a suite's blind spot
+is exactly the set of components it does not traverse, and no coverage percentage can show it,
+because the uncovered component has no lines in this repository. `gates.sh` prints the
+live-only checks as NOT RUN in an out-of-band block on every run — outside its counters and
+its exit status, so an offline run stays green while the absence stays visible.
 
 ## 8. What is not deployed, and will not be
 
