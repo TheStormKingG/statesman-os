@@ -1,0 +1,29 @@
+# POSITIVE CONTROL for the specificity WAIVER itself.
+#
+# Identical in shape to MS7 — the same catcher string, matching zero baseline tests — but
+# with NO `negative-control:` header. The gate must still SPEC FAIL it and exit 2.
+#
+# Why this file exists at all: a waiver that exempted EVERY entry produces exactly the same
+# clean output as one that exempts only what it should. The three controls in the parent
+# directory show the waived half (three SPEC WAIVED lines, then three verdicts, exit 1).
+# This shows the other half, and the two together are what make the waiver evidence rather
+# than an assertion.
+#
+#     MUTATION_DIR=mutations/negative-controls/waiver-control scripts/mutation-check.sh
+#     # must exit 2 with: SPEC FAIL  M99: expect-test matches 0 baseline tests
+#
+# It lives in a SUBDIRECTORY because `registry()` globs `$MUT_DIR/MS*.mut` and
+# `$MUT_DIR/M[0-9]*.mut` non-recursively: filed beside the three controls it would be
+# picked up by their run and make it exit 2 at the specificity stage instead of exit 1
+# with three verdicts, destroying the very behaviour that run exists to demonstrate.
+id: M99
+title: POSITIVE CONTROL - an undeclared entry whose catcher matches nothing
+expect: caught
+expect-test: a test that does not exist anywhere in this suite
+file: src/lib/supabase/client.ts
+count: 1
+@@FIND
+ * The ONE browser Supabase client, and the narrow `Database` type it is typed
+@@REPLACE
+ * The ONE browser Supabase client (positive control edit), and the narrow `Database` type it is typed
+@@END

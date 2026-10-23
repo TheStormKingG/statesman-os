@@ -1,13 +1,23 @@
 # NEGATIVE CONTROL for the gate: edits a COMMENT ONLY, so the suite must stay green,
 # while claiming `expect: caught`. The gate MUST report ESCAPED and exit 1.
+#
+# `negative-control: true` waives ONLY the catcher-specificity check. Naming a test that
+# does not exist is this entry's entire purpose, and the specificity check — correctly —
+# forbids exactly that, so before the waiver existed this control could not run at all:
+# the gate exited 2 at the specificity stage and computed no verdict. See observation 0486.
+#
+# RE-POINTED 2026-10-23: the old target `src/server/db/scoped.ts` was deleted by the
+# Supabase port (ADR-0015), so this control reported NOT-APPLIED rather than ESCAPED —
+# a stale control is a control that proves nothing about the verdict it was written for.
 id: MS7
 title: NEGATIVE CONTROL - a comment-only edit that claims to have a control
 expect: caught
+negative-control: true
 expect-test: a test that does not exist anywhere in this suite
-file: src/server/db/scoped.ts
+file: src/lib/supabase/client.ts
 count: 1
 @@FIND
- * The narrow query surface
+ * The ONE browser Supabase client, and the narrow `Database` type it is typed
 @@REPLACE
- * The narrow query surface (negative control edit; no behaviour changes)
+ * The ONE browser Supabase client (negative control edit; no behaviour changes), and the narrow `Database` type it is typed
 @@END

@@ -177,7 +177,7 @@ expect-test: a substring of the failing test's full name
 expect-test: another, if the mutation disables more than one rule
 proves: what a CAUGHT verdict here establishes
 
-file: src/server/db/scoped.ts
+file: supabase/migrations/20261021140500_verify_security_posture.sql
 count: 1
 @@FIND
   the exact text to remove, byte for byte
@@ -198,6 +198,13 @@ Rules:
   `create policy` statement.
 - `expect: uncaught` requires a `todo:` naming the test that is missing. `expect: caught`
   must not carry one.
+- `negative-control: true` declares the entry a control over **the gate** rather than over
+  the code, and waives **only** the catcher-specificity check below. `true` is the only
+  accepted value — there is no `false`, omit the header — because a value the parser does
+  not recognise must be an error and never a silent `false`. It is refused outright in the
+  shipped `mutations/` registry, on every run whatever `MUTATION_DIR` says, so a live
+  mutation can never buy its way out of specificity with a header. Only
+  `mutations/negative-controls/` may carry it.
 - `new-file: <path>` + `@@CONTENT … @@END` creates a file that must not already exist —
   used for a mutation that adds a migration.
 - Paths are mirror-relative. `..` is refused.
@@ -214,33 +221,97 @@ claim, not a control.
 ## 6. Proving the gate can fail
 
 The governing rule applies to this harness too, so the gate's own failure paths have been
-observed red rather than assumed:
+observed red rather than assumed.
+
+**This table is an execution record, not a standing property of the code.** Every row is
+a verdict observed on a date, from the harness as it stood that day. A gate inserted
+*upstream* of the stage a row describes invalidates that row silently — the run stops
+earlier than the row's subject, so the row is neither confirmed nor contradicted, and
+nothing fails. Re-run the two commands below whenever the harness itself is edited, and
+re-date the table. Treating it as a property is how it went stale the first time
+(§6.1).
+
+**As of 2026-10-23**, on `fix/mutation-negative-controls`:
 
 | Control | Observed |
 |---|---|
-| applier self-test (`mutations/lib/selftest.mjs`) | 9/9 pass normally; with the `readBlock` off-by-one reintroduced, **5 of 9 fail, exit 2** |
-| `mutations/negative-controls/MS7` — comment-only edit claiming `caught` | **ESCAPED**, suite green at 68/68, gate **exit 1** |
-| `mutations/negative-controls/MS8` — genuinely red, wrong catcher named | **MISATTRIBUTED**, suite red with 1 failure, gate **exit 1** |
-| `mutations/negative-controls/MS9` — `FIND` text that no longer exists | **NOT-APPLIED**, gate **exit 1** |
+| applier self-test (`mutations/lib/selftest.mjs`) | **14/14 pass**; with the `readBlock` off-by-one reintroduced, **5 of 9 fail, exit 2**; with check 11's subject broken, **1 fails, exit 2** |
+| `mutations/negative-controls/MS7` — comment-only edit claiming `caught` | **ESCAPED**, suite green at 143/143, gate **exit 1** |
+| `mutations/negative-controls/MS8` — genuinely red, wrong catcher named | **MISATTRIBUTED**, suite red with 1 failure (posture rule 4's control), gate **exit 1** |
+| `mutations/negative-controls/MS9` — `FIND` text that no longer exists | **NOT-APPLIED** (`contains the FIND text 0 time(s)`), gate **exit 1** |
+| `mutations/negative-controls/waiver-control/M99` — an undeclared entry carrying MS7's own catcher string | **SPEC FAIL**, gate **exit 2**. Run together with the three declared controls in one scratch registry: **SPEC FAIL for M99 only**, the three **SPEC WAIVED**, gate **exit 2** |
+| a `negative-control: true` planted on a live `mutations/` entry | refused by name at `assert-shipped`, gate **exit 2**, before the lock or any database work |
 | red baseline (`TEST_ADMIN_ROLE=no_such_bootstrap_role`) | `exit=1 tests=0`, **BASELINE IS NOT GREEN**, gate **exit 2**, no mutation applied |
 
 ```
-MUTATION_DIR=mutations/negative-controls scripts/mutation-check.sh   # must exit 1
-TEST_ADMIN_ROLE=no_such_bootstrap_role scripts/mutation-check.sh      # must exit 2
+MUTATION_DIR=mutations/negative-controls scripts/mutation-check.sh                # must exit 1
+MUTATION_DIR=mutations/negative-controls/waiver-control scripts/mutation-check.sh # must exit 2
+TEST_ADMIN_ROLE=no_such_bootstrap_role scripts/mutation-check.sh                  # must exit 2
 ```
+
+The first proves the gate still emits `ESCAPED`, `MISATTRIBUTED` and `NOT-APPLIED`. The
+second proves the waiver is **selective**: `M99` carries MS7's catcher string verbatim and
+no `negative-control:` header, so it must still fail specificity. Both halves are needed —
+a waiver that exempted every entry would make the first command pass and look identical.
+`M99` sits in a subdirectory because `registry()` globs non-recursively: filed beside the
+three controls it would be swept into their run and make it exit 2 at the specificity stage
+instead of exit 1 with three verdicts.
+
+A default run shows the other end of this: with no declared control in `mutations/`, the
+specificity line prints its unwaived form — `CATCHERS SPECIFIC — every expect-test resolves
+to exactly one baseline test`, byte-identical to before the waiver existed.
 
 The negative controls live in `mutations/negative-controls/`, which `registry()` does not
 glob. They ship so the gate's teeth stay re-provable; they never run in CI, because a
 mutation that is deliberately not caught would fail it forever.
+
+### 6.1 Why the controls carry `negative-control: true`
+
+The three controls are built from the one property a registry-validation gate is most
+likely to police: a catcher that does not name a live test. MS7's purpose *is* to claim a
+control that does not exist, and MS9 expects never to be applied, so requiring it to name
+a live test is incoherent by construction.
+
+So when the catcher-specificity check was added — correctly, closing a real false-`CAUGHT`
+hole — all three controls failed it, and they failed it *before* the verdict stage. The
+command documented above stopped exiting 1 with three verdicts and started exiting 2 with
+three `SPEC FAIL` lines and no verdict at all. **The harness's ability to emit any
+non-`CAUGHT` verdict had no executable proof**, and nothing announced it: the controls are
+deliberately outside CI, so the one population that could detect the regression is the one
+population no scheduled run touches. Meanwhile `36 of 36 CAUGHT` kept reading as total
+strength.
+
+`negative-control: true` is the declared exemption. It waives **only** catcher
+specificity; the entry still applies, still runs, and still has to produce its recorded
+verdict. Three properties make it safe:
+
+- **Declared on the entry, not inferred from the directory.** A path can change and an
+  exemption that travels with one is invisible to anyone reading the entry.
+- **Refused in the shipped registry**, checked on every run whatever `MUTATION_DIR` says.
+  A live mutation cannot buy its way out of specificity with a header, which would hand
+  the false-`CAUGHT` hole back one entry at a time.
+- **Counted and printed when exercised.** A silent exemption and a working check produce
+  identical output, so the run states how many entries were waived.
+
+The general rule, for the next gate added here: **a well-formedness check over a set of
+test specifications will tend to reject that set's own negative controls**, because being
+ill-formed in one specific dimension is what those controls are *for*. Run any new
+validation gate against `mutations/negative-controls/` before shipping it.
+
+*Recorded as observation 0486.*
 
 **The applier's self-test earns its place.** `readBlock` originally advanced past a marker
 it was already past. The effect was invisible from outside: every single-line `@@REPLACE`
 block came out **empty** and every multi-line one lost its **first line**, so mutations
 applied a *corrupted* edit. The suite went red for the wrong reason, and the gate's first
 full run reported `MISATTRIBUTED` and `UNATTRIBUTED` across the board with no way to say
-why. The nine checks now assert exact bytes for both shapes, and four of them require the
-applier to refuse: an absent `FIND`, an ambiguous `FIND`, an `uncaught` entry with no
-`todo:`, and a path escaping the mirror.
+why. The checks now assert exact bytes for both shapes, and six of the fourteen require
+the applier to refuse: an absent `FIND`, an ambiguous `FIND`, an `uncaught` entry with no
+`todo:`, a path escaping the mirror, a `negative-control:` value other than `true`, and a
+declared control sitting in the shipped registry. The self-test prints a **counted**
+total: it read a hardcoded `9/9` while fourteen checks ran, which is the same defect the
+harness exists to catch one level up — a summary that cannot disagree with the work it
+summarises is not a measurement.
 
 ---
 

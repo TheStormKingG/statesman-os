@@ -1,14 +1,24 @@
 # NEGATIVE CONTROL for the gate: a mutation that genuinely goes red (it is MS1's edit),
 # but names a catcher that will not fail. The gate MUST report MISATTRIBUTED and exit 1 —
 # "something failed" is not evidence that the right thing failed.
+#
+# The named catcher does not exist in the suite, which is one way of being the WRONG
+# catcher and the deterministic one: a real test might be dragged red by the same edit and
+# turn this control into a CAUGHT. That is also why `negative-control: true` is required
+# here — the specificity check forbids a catcher matching zero tests.
+#
+# RE-POINTED 2026-10-23: the old target `migrations/0005_verify_security_posture.sql` was
+# deleted by the Supabase port (ADR-0015); the live posture migration is the file below,
+# and this is byte-for-byte MS1's edit, which is observed CAUGHT in every gate run.
 id: MS8
 title: NEGATIVE CONTROL - a genuinely red mutation attributed to the wrong test
 expect: caught
+negative-control: true
 expect-test: toolchain smoke runs a sync assertion
-file: migrations/0005_verify_security_posture.sql
+file: supabase/migrations/20261021140500_verify_security_posture.sql
 count: 1
 @@FIND
-    where n.nspname in ('app','public') and has_function_privilege('public', p.oid, 'EXECUTE')
+    where n.nspname in ('app','public') and has_function_privilege(g.grantee, p.oid, 'EXECUTE')
 @@REPLACE
-    where n.nspname in ('__never_a_schema__') and has_function_privilege('public', p.oid, 'EXECUTE')
+    where n.nspname in ('__never_a_schema__') and has_function_privilege(g.grantee, p.oid, 'EXECUTE')
 @@END
