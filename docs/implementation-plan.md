@@ -1487,7 +1487,7 @@ documentation.
 
 #### 6.3 AST import-boundary check
 
-- **Files:** `scripts/check-import-boundary.ts`,
+- **Files:** `scripts/check-import-boundaries.ts`,
   `tests/unit/tooling/import-boundary.test.ts`.
 - **Behaviour:** The `pg` package may be imported only within `src/server/db/**`. The checker
   walks the TypeScript API and sees **static imports, `require` and dynamic `import()`**.
@@ -1636,13 +1636,31 @@ documentation.
   §11 verbatim and that each resolves to a script in `package.json`. Fails on a drifted command.
 - **Verify:** `npm run docs:check` → exit 0.
 
-#### 6.11 CSRF origin verification
+#### 6.11 CSRF origin verification — **RETIRED, superseded by ADR-0019**
+
+> **This task is closed by a decision, not by an implementation.** ADR-0015 removed the server
+> request boundary origin verification is defined against, so every file and command named below
+> pointed at something absent: `src/server` does not exist, `grep -rl 'use server' src/` returns
+> 0 files, no `route.ts` exists anywhere under `src/`, `next.config.ts` pins `output: 'export'`,
+> there is no cookie, and there is no `e2e` script or Playwright config. The paths below are
+> struck rather than quietly ignored, because this document owns file layout and a later reader
+> would otherwise create `src/server/**` to satisfy it.
+>
+> What was built instead is the enforcement of the precondition —
+> `tests/unit/no-server-surface.test.ts`, which fails the unit gate if a Server Action, Route
+> Handler, `middleware.ts` or non-export config appears, and which was **measured** failing on the
+> real tree. `T-46` is `NOT_APPLICABLE`; `TC-SEC-046` is re-pointed, not deleted; the residuals
+> origin verification never covered are now `R-23` (clickjacking — unbuildable on GitHub Pages)
+> and `R-24` (`detectSessionInUrl` session fixation). See
+> [ADR-0019](adr/ADR-0019-retire-csrf-origin-verification.md) and `docs/decisions.md` D15.
 
 - **Requirement:** Canon §12.1 item 1 — the threat model's CSRF control, in P0 scope; NFR-01.
-- **Files:** `src/server/http/verify-origin.ts`, `src/server/http/action-guard.ts`,
+- **Files:** ~~`src/server/http/verify-origin.ts`, `src/server/http/action-guard.ts`,
   `src/middleware.ts`, `tests/e2e/csrf.spec.ts`,
-  `tests/unit/http/verify-origin.test.ts`, a CSRF-mechanism ADR (number allocated per task 0.1
-  and entered in `docs/adr/RESERVED.md`).
+  `tests/unit/http/verify-origin.test.ts`~~ — **struck: no server surface exists.** Replaced by
+  `tests/unit/no-server-surface.test.ts` and `tests/unit/support/server-surface.ts`, plus
+  `docs/adr/ADR-0019-retire-csrf-origin-verification.md` (the ADR canon §12.1 item 1 requires,
+  discharged by recording that there is no mechanism to choose, and why).
 - **Behaviour:** **Every** state-changing Server Action and Route Handler verifies the request
   origin server-side: the `Origin` header (falling back to `Referer` only where the browser omits
   `Origin`) must match the configured application origin, and a request with a missing or

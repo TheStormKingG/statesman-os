@@ -27,7 +27,10 @@ meta:
     PERSON: no account exists on the project, so every screen is unverified end to end
     and the authenticated HTTP path to the lifecycle RPCs is unproven. This field is a
     design statement, not a run outcome; run outcomes live only in reports/.
-  status_vocabulary: [PLANNED, DEFERRED]
+  # NOT_APPLICABLE added 2026-10-24 by ADR-0019: a design property of scope for an item whose
+  # PRECONDITION was removed, so it is neither planned nor waiting. It is still not a run
+  # status — PASS, FAIL and NOT RUN remain unrepresentable here (canon §9).
+  status_vocabulary: [PLANNED, DEFERRED, NOT_APPLICABLE]
   status_is: a design property of scope, stable between runs
   run_outcome_vocabulary: [PASS, FAIL, NOT RUN]
   run_outcome_lives_in: reports/trace.json
@@ -1384,12 +1387,21 @@ threats:
       canon_12_1: true
       status: PLANNED
     - id: T-46
-      title: CSRF against Server Actions
+      title: CSRF against Server Actions (retired - no server surface, ADR-0019)
       test_cases: [TC-SEC-046]
       tag: tc:TC-SEC-046
       covers: [NFR-02, FR-14]
       canon_12_1: true
-      status: PLANNED
+      # NOT_APPLICABLE, not DEFERRED: nothing is waiting. ADR-0015 removed the server request
+      # boundary origin verification is defined against. TC-SEC-046 is RE-POINTED, never deleted -
+      # a deleted id means no tagged test can ever match it - and now names the precondition
+      # enforcement that replaced the control.
+      status: NOT_APPLICABLE
+      not_applicable_because: >-
+        ADR-0019. No Server Action, Route Handler, middleware or cookie exists, and the bearer
+        token is read from origin-partitioned localStorage by the page's own script, so it is not
+        an ambient credential. Replaced by tests/unit/no-server-surface.test.ts, which fails the
+        unit gate if any server surface appears.
     - id: T-47
       title: Private content in logs and telemetry
       test_cases: [TC-SEC-047]

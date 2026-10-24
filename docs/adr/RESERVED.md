@@ -15,7 +15,17 @@ had already been recorded.
 | ADR | What will fill it | Referenced from |
 |---|---|---|
 | **0014** | The pinned toolchain: every dependency at an exact version, with the resolved versions **read back from `package-lock.json`** rather than stated from memory (canon O3, O4), plus the Node and npm lines the install was performed with. | `implementation-plan.md` §0.1 and its gate table, which currently cite this record as `ADR-0013-pinned-toolchain.md` — see the collision note below. |
-| **0015** | CSRF origin verification on every state-changing Server Action and Route Handler: the mechanism itself, and why `SameSite=Lax` is not the control. Canon §12.1 item 1 requires an ADR for this specifically. | Canon §12.1 item 1; `threat-model.md` residual R-16, which names "a canon amendment or an ADR" without a number. |
+
+## Abandoned reservations — never reused
+
+A reservation is abandoned when the design it was held for is settled by deciding NOT to build
+the thing. The number is **not** returned to the pool: this file's rule is that a number, once
+issued, is never reused, so a stale citation lands on nothing rather than on an unrelated
+decision.
+
+| ADR | Held for | Outcome |
+|---|---|---|
+| **0015** | CSRF origin verification: the mechanism, and why `SameSite=Lax` is not the control (canon §12.1 item 1). | **Abandoned.** The reservation was itself broken — `ADR-0015` is the static-export decision (see the second collision below) — and the design it was held for was retired rather than chosen: ADR-0015 removed the server request boundary origin verification is defined against. Recorded in [ADR-0019](ADR-0019-retire-csrf-origin-verification.md), with the residuals that survive. |
 
 ## Numbering collision to resolve
 
@@ -27,6 +37,8 @@ to canon §4.4. Under canon §12 this directory owns the numbering, so the toolc
 ADR number referenced in `docs/` resolves to a file will pass on the number and land a reader on
 the wrong decision, which is worse than a missing file — so this is a correction to make in
 `implementation-plan.md`, not something to absorb by renumbering here.
+
+**A second collision, of the same shape.** This file reserved **0015** for the CSRF mechanism while `ADR-0015-static-github-pages-plus-supabase.md` already occupied that number. The two are not merely different decisions: the occupant is the decision that made the reservation's subject inapplicable. It is recorded above as abandoned and the replacement took **0019**. The pattern in both collisions is the same — a number cited from another document before this file was consulted — which is the thing a `docs:check` over ADR references would have caught at the point of writing.
 
 ## Designs required by canon §12.1 that have no number yet
 

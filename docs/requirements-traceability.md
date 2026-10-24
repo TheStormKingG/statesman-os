@@ -381,7 +381,7 @@ a CSP, and NFR-10 source status and archival.
 | T-43 | A custom SQLSTATE silently collapses to 42704 | `TC-SEC-043` | `tc:TC-SEC-043` | INV-03 | PLANNED |
 | T-44 | Stored XSS through journal fields **(canon §12.1)** | `TC-SEC-044` | `tc:TC-SEC-044` | NFR-02, FR-19 | PLANNED |
 | T-45 | Stored XSS through model output **(canon §12.1)** | `TC-SEC-045` | `tc:TC-SEC-045` | NFR-02, FR-08 | PLANNED |
-| T-46 | CSRF against Server Actions **(canon §12.1)** | `TC-SEC-046` | `tc:TC-SEC-046` | NFR-02, FR-14 | PLANNED |
+| T-46 | CSRF against Server Actions — retired, no server surface **(ADR-0019)** | `TC-SEC-046` | `tc:TC-SEC-046` | NFR-02, FR-14 | NOT_APPLICABLE |
 | T-47 | Private content in logs and telemetry **(canon §12.1)** | `TC-SEC-047` | `tc:TC-SEC-047` | NFR-02, FR-19 | PLANNED |
 | T-48 | The export route leaks across users | `TC-SEC-048` | `tc:TC-SEC-048` | FR-16, NFR-09, INV-06 | PLANNED |
 | T-49 | Accidental public exposure of journal content | `TC-SEC-049` | `tc:TC-SEC-049` | FR-19 | PLANNED |
