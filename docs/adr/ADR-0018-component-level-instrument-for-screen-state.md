@@ -119,3 +119,20 @@ the same standing the applier self-test's own control has in
   the config supplies placeholder values pointing at `.invalid`. Every call that
   would use them is mocked; a request actually reaching `.invalid` is a bug in a
   mock, which is the behaviour wanted.
+
+  **The CI environment supplies the REAL values, and the placeholders still
+  win — measured, not assumed.** `pages.yml` exports
+  `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from repository
+  secrets for the build, and they are therefore present in the environment of
+  the component step too, which raises a fair doubt: if the ambient value won,
+  an unmocked call in a future component test would reach the live project from
+  CI. Measured 2026-10-24 by running the suite with an ambient
+  `NEXT_PUBLIC_SUPABASE_URL` set to a different host and printing what the test
+  actually sees:
+
+      MEASURED_URL=https://component-suite.invalid
+
+  Vitest's `test.env` overrides the ambient environment, so the suite sees the
+  placeholder in CI as well as locally. Recorded here because the CI log plainly
+  shows the real URL in that step's `env:` block, and a reader who stops there
+  would reasonably conclude the opposite.
