@@ -48,7 +48,7 @@ not yet decided:
 
 - **Log and telemetry redaction** — the field classification, and the test that a full loop leaks
   no journal field value, token or connection string into any captured log or telemetry payload.
-- **Stored-XSS rendering and CSP** — the single escaping component every journal field and model
+- ~~**Stored-XSS rendering and CSP**~~ — **the CSP half is now [ADR-0020](ADR-0020-csp-as-a-meta-tag-with-per-build-hashes.md)**, which also owns the directive map. What remains unnumbered is the escaping component itself (plan task 6.6a): the single component every journal field and model
   output renders through, the policy itself, and the recorded residual that `freeText` rejects
   URIs and control characters but **not** HTML metacharacters, which makes escaping at render
   load-bearing rather than defence in depth.

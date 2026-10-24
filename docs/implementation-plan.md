@@ -1534,6 +1534,10 @@ documentation.
 
 #### 6.6 Stored-XSS rendering through one escaping component, plus the CSP
 
+> **The CSP half is delivered, by a different mechanism than this task specifies.** Setting it in `next.config.ts` has no mechanism under `output: 'export'` — there is no server to send a header, as that file's own comment at line 93 states — and a RED test asserting a response header deep-equals a map could never pass. Delivered instead as a `<meta http-equiv>` tag with per-file sha256 hashes, injected post-build by `scripts/csp.mjs` and gated by `npm run csp:check` in `pages.yml`. See [ADR-0020](adr/ADR-0020-csp-as-a-meta-tag-with-per-build-hashes.md), which also owns the directive map that no document previously owned.
+>
+> **Still outstanding from this task: 6.6a**, the single escaping component and its AST rendering-boundary checker. The CSP is the second layer; `freeText` not rejecting HTML metacharacters is why the first one is load-bearing.
+
 - **Requirement:** Canon §12.1 item 3 — the threat model's stored-XSS control, in P0 scope.
 - **Files:** `next.config.ts`, `src/app/error.tsx`, `src/app/not-found.tsx`,
   `src/components/rendered-text.tsx`, `scripts/check-rendering-boundary.ts`,

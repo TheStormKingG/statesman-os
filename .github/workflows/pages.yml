@@ -189,6 +189,20 @@ jobs:
         run: npx next build
 
       # ── the export is checked before it is uploaded, not after ─────────────
+      # ADR-0020. The CSP is a <meta http-equiv> tag with per-file sha256 hashes,
+      # because GitHub Pages serves static files and sets no response headers.
+      # This MUST run before the export audit and the upload, so both see the
+      # artefact that actually ships.
+      - name: Inject the Content-Security-Policy
+        run: npm run csp:inject
+
+      # The gate for it. Separate from the injector on purpose: a step that both
+      # writes and blesses its own output cannot fail. This one re-derives every
+      # hash from the emitted HTML and fails if any inline script is uncovered, if
+      # any inline style attribute reappeared, or if an unsafe-* keyword crept in.
+      - name: Gate — the CSP covers every emitted page
+        run: npm run csp:check
+
       - name: Verify the export
         run: |
           set -euo pipefail

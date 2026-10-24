@@ -314,6 +314,7 @@ printf ' %-34s %s\n' "CHECK" "COVERS"
 printf ' %-34s %s\n' "----------------------------------" "---------------------------"
 printf ' %-34s %s\n' "scripts/verify-rest-exposure.sh" "TBS-01 TBS-02 TBS-03 TBS-04"
 printf ' %-34s %s\n' "npx supabase db push" "the applied migration set"
+printf ' %-34s %s\n' "npm run csp:check (post-build)" "ADR-0020 CSP over out/**/*.html"
 printf '\n'
 printf ' Blind spots with no instrument at all: TBS-06 (the published bundle),\n'
 printf ' TBS-07 (Supabase Auth endpoints), TBS-08 (the browser runtime).\n'

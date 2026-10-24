@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "csp:inject": "node scripts/csp.mjs inject out",
+    "csp:check": "node scripts/csp.mjs check out",
     "db:bootstrap": "bash scripts/db-bootstrap.sh",
     "db:migrate": "bash scripts/migrate.sh",
     "db:template": "bash scripts/db-template.sh",
